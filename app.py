@@ -14,7 +14,7 @@ import uuid
 # --- PAGE CONFIG ---
 st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro")
 
-# --- SESSION STATE ---
+# --- SESSION STATE INITIALIZATION ---
 if 'search_results' not in st.session_state: st.session_state.search_results = None
 if 'image_cache' not in st.session_state: st.session_state.image_cache = {}
 if 'map_center' not in st.session_state: st.session_state.map_center = [40.4168, -3.7038] 
@@ -31,7 +31,6 @@ st.sidebar.markdown("---")
 st.sidebar.header("2. Search Area")
 city_name = st.sidebar.text_input("City Name", "Madrid, Spain")
 
-# FALLBACK: Manual Coordinates
 with st.sidebar.expander("📍 Manual Coordinates (Use if Search Fails)"):
     man_lat = st.number_input("Lat", value=40.4168, format="%.4f")
     man_lon = st.number_input("Lon", value=-3.7038, format="%.4f")
@@ -81,15 +80,14 @@ if CLIENT_ID and CLIENT_SECRET:
             lat, lon = man_lat, man_lon
         else:
             try:
-                # Use unique UUID in user_agent to bypass 429 errors
                 geolocator = Nominatim(user_agent=f"sentinel_explorer_{st.session_state.app_uuid}")
                 location = geolocator.geocode(city_name, timeout=10)
                 if location:
                     lat, lon = location.latitude, location.longitude
                 else:
                     st.error("Location not found. Try manual coordinates.")
-            except Exception as e:
-                st.warning(f"Geocoding Error (429). Switching to manual coordinates below.")
+            except Exception:
+                st.warning("Geocoding Error. Falling back to manual coordinates.")
                 lat, lon = man_lat, man_lon
 
         if lat is not None:
@@ -104,13 +102,17 @@ if CLIENT_ID and CLIENT_SECRET:
             st.session_state.image_cache = {} 
 
     if st.session_state.search_results:
+        # DISPLAY TOTAL MAPS FOUND
+        total_found = len(st.session_state.search_results)
+        st.info(f"✅ Total images found for this criteria: **{total_found}**")
+
         results = st.session_state.search_results
         date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
-        selected_dates = st.multiselect("Pick 4 dates:", date_options, default=date_options[:min(len(date_options), 4)])
+        selected_dates = st.multiselect("Pick 4 dates for comparison:", date_options, default=date_options[:min(len(date_options), 4)])
 
-        st.markdown("### 🔗 Map Synchronization")
+        st.markdown("### 🔗 Synchronized View")
         l_cols = st.columns(4)
-        sync_states = [l_cols[i].checkbox(f"Link {i+1}", value=True) for i in range(4)]
+        sync_states = [l_cols[i].checkbox(f"Link Map {i+1}", value=True) for i in range(4)]
 
         if st.button("🖼️ DOWNLOAD & RENDER", use_container_width=True):
             if len(selected_dates) == 4:
@@ -133,7 +135,7 @@ if CLIENT_ID and CLIENT_SECRET:
                                 bbox=bbox_obj, size=(800, 800), config=config)
                             st.session_state.image_cache[actual_date] = request.get_data()[0]
                         except Exception as e:
-                            st.error(f"Sentinel API Error: {e}. If it is a 429, please wait 60 seconds.")
+                            st.error(f"Error fetching data: {e}")
                             break
 
         if len(st.session_state.image_cache) >= 4:
@@ -145,17 +147,37 @@ if CLIENT_ID and CLIENT_SECRET:
                     data = st.session_state.image_cache[actual_date]
                     img_rgb = np.clip(data[:, :, rgb_indices] * brightness, 0, 1)
                     img_url = get_image_url(img_rgb)
+                    
                     m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=selected_basemap)
                     folium.raster_layers.ImageOverlay(image=img_url, bounds=st.session_state.current_bounds, opacity=opacity).add_to(m)
+                    
                     with (c_left if i % 2 == 0 else c_right):
                         st.caption(f"Map {i+1}: {actual_date[:10]}")
-                        m_out = st_folium(m, height=350, width=500, key=f"sync_{actual_date}")
+                        # SMOOTH SYNC INTEGRATION
+                        m_out = st_folium(
+                            m, 
+                            height=350, 
+                            width=500, 
+                            key=f"smooth_v5_{actual_date}",
+                            returned_objects=["center", "zoom"],
+                            debounce=200 # Prevents stuttering during drag
+                        )
+                        
                         if m_out and m_out.get('center') and sync_states[i]:
-                            new_c = [m_out['center']['lat'], m_out['center']['lng']]
-                            new_z = m_out['zoom']
-                            if (abs(new_c[0] - st.session_state.map_center[0]) > 0.001 or new_z != st.session_state.map_zoom):
-                                st.session_state.map_center = new_c
-                                st.session_state.map_zoom = new_z
+                            new_lat = round(m_out['center']['lat'], 4)
+                            new_lng = round(m_out['center']['lng'], 4)
+                            new_zoom = m_out['zoom']
+                            
+                            curr_lat = round(st.session_state.map_center[0], 4)
+                            curr_lng = round(st.session_state.map_center[1], 4)
+                            
+                            # Threshold check to filter out micro-movements
+                            if (abs(new_lat - curr_lat) > 0.0005 or 
+                                abs(new_lng - curr_lng) > 0.0005 or 
+                                new_zoom != st.session_state.map_zoom):
+                                
+                                st.session_state.map_center = [new_lat, new_lng]
+                                st.session_state.map_zoom = new_zoom
                                 st.rerun()
 else:
-    st.info("👋 Please enter credentials in the sidebar.")
+    st.info("👋 Welcome! Please enter credentials in the sidebar to begin.")
