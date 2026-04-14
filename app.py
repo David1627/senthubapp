@@ -12,9 +12,10 @@ import base64
 from io import BytesIO
 from PIL import Image
 import uuid
+import tifffile # Ensure you have this: pip install tifffile
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro V6.5", page_icon="🌍")
+st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro V7", page_icon="🌍")
 
 # --- INITIALIZE SESSION STATE ---
 if 'search_results' not in st.session_state: st.session_state.search_results = None
@@ -36,6 +37,18 @@ def get_season(month):
     if month in [3, 4, 5]: return "Spring 🌱"
     if month in [6, 7, 8]: return "Summer ☀️"
     return "Autumn 🍂"
+
+def create_tiff_download(data, filename):
+    """Creates a download button for a GeoTIFF (simulated via tifffile)"""
+    buffered = BytesIO()
+    tifffile.imwrite(buffered, data.astype('float32'))
+    return st.download_button(
+        label=f"💾 Download {filename}",
+        data=buffered.getvalue(),
+        file_name=filename,
+        mime="image/tiff",
+        use_container_width=True
+    )
 
 BAND_NAMES = {"B02 (Blue)": 0, "B03 (Green)": 1, "B04 (Red)": 2, "B08 (NIR)": 3, "B11 (SWIR1)": 4, "B12 (SWIR2)": 5}
 PRESETS = {"Natural Color": [2, 1, 0], "False Color NIR": [3, 2, 1], "Agriculture": [4, 3, 0], "Custom": "CUSTOM"}
@@ -100,7 +113,6 @@ if CLIENT_ID and CLIENT_SECRET:
     with tab_map:
         if st.session_state.search_results:
             results = st.session_state.search_results
-            st.info(f"Total Images Found: {len(results)}")
             date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
             selected_dates = st.multiselect("Pick 4 dates for comparison:", date_options, default=date_options[:min(len(date_options), 4)])
 
@@ -130,31 +142,23 @@ if CLIENT_ID and CLIENT_SECRET:
                     actual_date = results[int(date_str.split(":")[0])]['properties']['datetime']
                     
                     with target_col:
-                        with st.expander(f"⚙️ View {i+1} Setup", expanded=False):
+                        data = st.session_state.image_cache[actual_date]
+                        with st.expander(f"⚙️ View {i+1} Options ({actual_date[:10]})", expanded=False):
                             v_preset = st.selectbox("Composition", list(PRESETS.keys()), key=f"p{i}")
                             v_sync = st.selectbox("Sync Group", ["None", "Group A", "Group B"], key=f"s{i}")
                             if v_preset == "Custom":
                                 v_rgb = [BAND_NAMES[st.selectbox("R", list(BAND_NAMES.keys()), index=2, key=f"r{i}")], 
                                          BAND_NAMES[st.selectbox("G", list(BAND_NAMES.keys()), index=1, key=f"g{i}")], 
                                          BAND_NAMES[st.selectbox("B", list(BAND_NAMES.keys()), index=0, key=f"b{i}")]]
-                            else:
-                                v_rgb = PRESETS[v_preset]
+                            else: v_rgb = PRESETS[v_preset]
+                            
+                            create_tiff_download(data, f"Sentinel2_{actual_date[:10]}_AllBands.tif")
 
                         pos = st.session_state.group_a_pos if v_sync == "Group A" else st.session_state.group_b_pos if v_sync == "Group B" else st.session_state.group_a_pos
                         m = folium.Map(location=pos["center"], zoom_start=pos["zoom"], tiles=selected_basemap)
-                        
-                        data = st.session_state.image_cache[actual_date]
                         img_rgb = np.clip(data[:, :, v_rgb] * brightness, 0, 1)
                         folium.raster_layers.ImageOverlay(image=get_image_url(img_rgb), bounds=st.session_state.current_bounds, opacity=opacity).add_to(m)
-                        
-                        m_out = st_folium(m, height=350, width=550, key=f"v6_{i}_{actual_date}", returned_objects=["center", "zoom"])
-
-                        if m_out and m_out.get('center') and v_sync != "None":
-                            new_lat, new_lng, new_z = round(m_out['center']['lat'], 4), round(m_out['center']['lng'], 4), m_out['zoom']
-                            sk = 'group_a_pos' if v_sync == "Group A" else 'group_b_pos'
-                            if abs(new_lat - st.session_state[sk]["center"][0]) > 0.001 or new_z != st.session_state[sk]["zoom"]:
-                                st.session_state[sk] = {"center": [new_lat, new_lng], "zoom": new_z}
-                                st.rerun()
+                        st_folium(m, height=350, width=550, key=f"v6_{i}_{actual_date}")
 
     with tab_analysis:
         if not st.session_state.image_cache:
@@ -165,10 +169,10 @@ if CLIENT_ID and CLIENT_SECRET:
             
             st.markdown(f"## 🏛️ Analysis Lab: {city_name}")
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Capture Date", dt_obj.strftime("%d %b %Y"))
-            m2.metric("Local Season", get_season(dt_obj.month))
+            m1.metric("Date", dt_obj.strftime("%d %b %Y"))
+            m2.metric("Season", get_season(dt_obj.month))
             m3.metric("Cloud Cover", f"{st.session_state.search_results[0]['properties'].get('eo:cloud_cover', 'N/A')}%")
-            m4.metric("Sensor", "Sentinel-2 L2A")
+            m4.metric("Sensor", "S2-L2A")
 
             st.markdown("---")
             data = st.session_state.image_cache[ana_date_str]
@@ -178,61 +182,53 @@ if CLIENT_ID and CLIENT_SECRET:
 
             with col_sidebar:
                 st.subheader("🛠️ Parameters")
-                target_idx = st.selectbox("Index", ["NDVI (Veg)", "NDMI (Moist)", "NDWI (Water)", "NDBI (Urban)"])
+                target_idx = st.selectbox("Index", ["NDVI", "NDMI", "NDWI", "NDBI"])
                 
-                if "NDVI" in target_idx:
-                    val = (B8 - B4) / (B8 + B4 + 1e-8)
-                    cmap_def = "RdYlGn"
-                elif "NDMI" in target_idx:
-                    val = (B8 - B11) / (B8 + B11 + 1e-8)
-                    cmap_def = "coolwarm"
-                elif "NDWI" in target_idx:
-                    val = (B3 - B8) / (B3 + B8 + 1e-8)
-                    cmap_def = "Blues"
-                else:
-                    val = (B11 - B8) / (B11 + B8 + 1e-8)
-                    cmap_def = "YlOrRd"
+                if target_idx == "NDVI": val = (B8 - B4) / (B8 + B4 + 1e-8)
+                elif target_idx == "NDMI": val = (B8 - B11) / (B8 + B11 + 1e-8)
+                elif target_idx == "NDWI": val = (B3 - B8) / (B3 + B8 + 1e-8)
+                else: val = (B11 - B8) / (B11 + B8 + 1e-8)
 
-                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "Spectral", "Greys", "Purples", "Blues", "Greens", "Oranges", "Reds", "YlOrBr", "YlOrRd", "OrRd", "PuRd", "RdPu", "BuPu", "GnBu", "PuBu", "YlGnBu", "PuBuGn", "BuGn", "YlG"], index=0)
+                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "coolwarm", "Spectral"], index=0)
                 
                 st.markdown("---")
-                st.subheader("🔦 Feature Masking")
-                min_mask, max_mask = st.slider("Index Range", -1.0, 1.0, (-1.0, 1.0))
+                st.subheader("🔦 Masking")
+                min_mask, max_mask = st.slider("Range", -1.0, 1.0, (-1.0, 1.0))
                 masked_val = np.copy(val)
                 masked_val[(val < min_mask) | (val > max_mask)] = np.nan
 
                 st.markdown("---")
-                st.subheader("🖼️ Blending")
-                show_overlay = st.checkbox("Overlay on Base Map", value=False)
+                st.subheader("💾 Export")
+                create_tiff_download(val, f"{target_idx}_{ana_date_str[:10]}.tif")
+                
+                show_overlay = st.checkbox("Overlay Base", value=False)
                 overlay_alpha = st.slider("Transparency", 0.0, 1.0, 0.5) if show_overlay else 1.0
 
             with col_main:
-                fig, ax = plt.subplots(figsize=(4, 2))
+                # Optimized Sizing: Large main plot
+                fig, ax = plt.subplots(figsize=(10, 5))
                 if show_overlay:
                     ax.imshow(np.clip(data[:, :, [2, 1, 0]] * brightness, 0, 1))
                     im = ax.imshow(masked_val, cmap=cmap_sel, alpha=overlay_alpha, vmin=-1, vmax=1)
                 else:
                     im = ax.imshow(masked_val, cmap=cmap_sel, vmin=-1, vmax=1)
-                
-                plt.colorbar(im, fraction=0.046, pad=0.04)
+                plt.colorbar(im, fraction=0.03, pad=0.04)
                 ax.axis('off')
                 st.pyplot(fig)
 
-                st.markdown("### 📊 Distribution & Statistics")
-                s1, s2, s3 = st.columns(3)
+                st.markdown("### 📊 Distribution")
                 clean_data = val[~np.isnan(val)]
-                s1.metric("Mean Value", f"{np.mean(clean_data):.3f}")
-                s2.metric("Max Intensity", f"{np.max(clean_data):.3f}")
-                s3.metric("Pixel Count", f"{len(clean_data):,}")
-
-                fig_h, ax_h = plt.subplots(figsize=(10, 6))
-                ax_h.hist(clean_data, bins=50, color='blue', alpha=0.8)
-                ax_h.set_title(f"Histogram: {target_idx}")
-                st.pyplot(fig_h)
                 
-                with st.expander("🔬 Formula & Guidance"):
-                    st.latex(r"Index = \frac{Band A - Band B}{Band A + Band B}")
-                    st.write("Use the masking slider to isolate specific features like dense urban areas or water bodies.")
+                # Optimized Sizing: Compact wide histogram
+                fig_h, ax_h = plt.subplots(figsize=(10, 2))
+                ax_h.hist(clean_data, bins=100, color='skyblue', edgecolor='black', alpha=0.7)
+                ax_h.set_title(f"{target_idx} Frequency", fontsize=10)
+                st.pyplot(fig_h)
+
+                s1, s2, s3 = st.columns(3)
+                s1.metric("Mean", f"{np.mean(clean_data):.3f}")
+                s2.metric("Max", f"{np.max(clean_data):.3f}")
+                s3.metric("Min", f"{np.min(clean_data):.3f}")
 
 else:
     st.info("👋 Enter your Client ID and Secret in the sidebar to start exploring.")
