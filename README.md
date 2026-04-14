@@ -39,8 +39,8 @@ Ensure you have a Sentinel Hub account. You will need your Client ID and Client 
 2. Install Dependencies
 Clone this repository and install the required Python libraries:
 
-git clone https://github.com/your-username/sentinel-explorer-pro.git
-cd sentinel-explorer-pro
+git clone [senthubapp](https://github.com/David1627/senthubapp.git)
+cd senthubapp
 pip install -r requirements.txt
 
 Note: Required libraries include streamlit, sentinelhub, folium, streamlit-folium, matplotlib, pandas, and geopy
