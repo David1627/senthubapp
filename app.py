@@ -152,46 +152,108 @@ with tab_map:
 
 with tab_analysis:
     if not st.session_state.image_cache:
-        st.warning("Please download data in the Dashboard tab first.")
+        st.warning("⚠️ Please download data in the Dashboard tab first.")
     else:
-        ana_date_str = st.selectbox("Analysis Date", list(st.session_state.image_cache.keys()))
+        # 1. TOP BAR: SITE INTEL
+        ana_date_str = st.selectbox("📅 Select Capture Date", list(st.session_state.image_cache.keys()), key="lab_date")
         dt_obj = datetime.datetime.fromisoformat(ana_date_str.replace('Z', '+00:00'))
         
-        st.markdown(f"### 📊 Site Report: {city_name}")
+        st.markdown(f"## 🏛️ Analysis Lab: {city_name}")
+        
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Date", dt_obj.strftime("%Y-%m-%d"))
-        m2.metric("Season", get_season(dt_obj.month))
-        m3.metric("Day", dt_obj.strftime("%A"))
-        m4.metric("Month", dt_obj.strftime("%B"))
+        m1.metric("Capture Date", dt_obj.strftime("%d %b %Y"))
+        m2.metric("Local Season", get_season(dt_obj.month))
+        m3.metric("Cloud Cover", f"{st.session_state.search_results[0]['properties'].get('eo:cloud_cover', 'N/A')}%")
+        m4.metric("Sensor", "Sentinel-2 L2A")
 
         st.markdown("---")
-        col_ctrl, col_viz = st.columns([1, 2])
-        
-        with col_ctrl:
-            idx_choice = st.selectbox("Spectral Index", ["NDVI", "NDMI", "NDWI", "NDBI"])
-            cmap_choice = st.selectbox("Color Map", ["RdYlGn", "magma", "viridis", "Spectral", "terrain"])
-            
-            data = st.session_state.image_cache[ana_date_str]
-            B3, B4, B8, B11 = data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4]
-            
-            if idx_choice == "NDVI": val = (B8 - B4) / (B8 + B4 + 1e-8)
-            elif idx_choice == "NDMI": val = (B8 - B11) / (B8 + B11 + 1e-8)
-            elif idx_choice == "NDWI": val = (B3 - B8) / (B3 + B8 + 1e-8)
-            elif idx_choice == "NDBI": val = (B11 - B8) / (B11 + B8 + 1e-8)
 
-            st.table(pd.DataFrame({"Metric": ["Mean", "Max", "Min"], "Value": [np.mean(val), np.max(val), np.min(val)]}))
-            
-            fig_h, ax_h = plt.subplots(figsize=(4, 2))
-            ax_h.hist(val.flatten(), bins=30, color='green', alpha=0.7)
-            st.pyplot(fig_h)
+        # 2. CALCULATION ENGINE
+        data = st.session_state.image_cache[ana_date_str]
+        # Band mapping: B2=0, B3=1, B4=2, B8=3, B11=4, B12=5
+        B2, B3, B4, B8, B11, B12 = data[:,:,0], data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4], data[:,:,5]
 
-        with col_viz:
-            fig_v, ax_v = plt.subplots(figsize=(10, 8))
-            im = ax_v.imshow(val, cmap=cmap_choice)
-            plt.colorbar(im)
-            ax_v.axis('off')
-            st.pyplot(fig_v)
+        col_sidebar, col_main = st.columns([1, 3])
+
+        with col_sidebar:
+            st.subheader("🛠️ Parameters")
+            target_idx = st.selectbox("Analysis Index", ["NDVI (Veg)", "NDMI (Moisture)", "NDWI (Water)", "NDBI (Urban)"], key="lab_idx")
             
-            with st.expander("🔬 Formula Info"):
-                formulas = {"NDVI": r"\frac{NIR - Red}{NIR + Red}", "NDMI": r"\frac{NIR - SWIR}{NIR + SWIR}", "NDWI": r"\frac{Green - NIR}{Green + NIR}", "NDBI": r"\frac{SWIR - NIR}{SWIR + NIR}"}
-                st.latex(formulas[idx_choice])
+            # Map Index Choice to Math
+            if "NDVI" in target_idx:
+                val = (B8 - B4) / (B8 + B4 + 1e-8)
+                default_cmap = "RdYlGn"
+                desc = "Vegetation Health"
+            elif "NDMI" in target_idx:
+                val = (B8 - B11) / (B8 + B11 + 1e-8)
+                default_cmap = "coolwarm"
+                desc = "Surface Moisture"
+            elif "NDWI" in target_idx:
+                val = (B3 - B8) / (B3 + B8 + 1e-8)
+                default_cmap = "Blues"
+                desc = "Open Water"
+            else: # NDBI
+                val = (B11 - B8) / (B11 + B8 + 1e-8)
+                default_cmap = "YlOrRd"
+                desc = "Built-up Intensity"
+
+            cmap_sel = st.selectbox("Colormap Style", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "PRGn"], index=0)
+            
+            st.markdown("---")
+            st.subheader("🔦 Feature Masking")
+            st.write("Hide pixels outside this range:")
+            min_mask, max_mask = st.slider("Threshold Range", -1.0, 1.0, (-1.0, 1.0))
+            
+            # Apply Mask
+            masked_val = np.copy(val)
+            masked_val[(val < min_mask) | (val > max_mask)] = np.nan
+
+            st.markdown("---")
+            st.subheader("🖼️ Display Options")
+            show_overlay = st.checkbox("Overlay on Natural Color", value=False)
+            overlay_alpha = st.slider("Overlay Transparency", 0.0, 1.0, 0.5) if show_overlay else 1.0
+
+        with col_main:
+            # Main Visualization
+            fig, ax = plt.subplots(figsize=(10, 7))
+            
+            if show_overlay:
+                # Show natural color base
+                base_rgb = np.clip(data[:, :, [2, 1, 0]] * brightness, 0, 1)
+                ax.imshow(base_rgb)
+                # Overlay the index
+                im = ax.imshow(masked_val, cmap=cmap_sel, alpha=overlay_alpha, vmin=-1, vmax=1)
+            else:
+                # Show index only
+                im = ax.imshow(masked_val, cmap=cmap_sel, vmin=-1, vmax=1)
+            
+            plt.colorbar(im, label=f"Index Intensity ({desc})", fraction=0.046, pad=0.04)
+            ax.axis('off')
+            st.pyplot(fig)
+
+            # STATISTICS PANEL
+            st.markdown("### 📊 Pixel Distribution & Stats")
+            s1, s2, s3 = st.columns(3)
+            
+            # Filter out NaNs for stats
+            clean_data = val[~np.isnan(val)]
+            s1.metric("Mean Intensity", f"{np.mean(clean_data):.3f}")
+            s2.metric("Peak Value", f"{np.max(clean_data):.3f}")
+            
+            # Land Cover Estimation (for NDVI specifically)
+            if "NDVI" in target_idx:
+                high_veg = np.sum(val > 0.6) / val.size * 100
+                s3.metric("Dense Canopy %", f"{high_veg:.1f}%")
+
+            # Histogram
+            fig_hist, ax_hist = plt.subplots(figsize=(8, 2))
+            ax_hist.hist(clean_data, bins=100, color='gray', alpha=0.3, density=True)
+            # Add a colored gradient under the histogram to show what values mean
+            ax_hist.set_title(f"Histogram of {target_idx}")
+            st.pyplot(fig_hist)
+            
+            with st.expander("📝 How to read this analysis"):
+                st.write(f"The **{target_idx}** ranges from -1 to +1.")
+                st.write("- **Positive values** typically indicate the presence of the feature (Plants, Water, or Buildings).")
+                st.write("- **Negative values** usually indicate the opposite (e.g., Water has negative NDVI).")
+                st.write("- **Masking:** Use the slider on the left to isolate specific features, like 'High Density Urban' or 'Deep Water'.")
