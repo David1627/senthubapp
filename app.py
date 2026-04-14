@@ -14,15 +14,15 @@ import uuid
 # --- PAGE CONFIG ---
 st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro")
 
-# --- SESSION STATE INITIALIZATION ---
+# --- SESSION STATE ---
 if 'search_results' not in st.session_state: st.session_state.search_results = None
 if 'image_cache' not in st.session_state: st.session_state.image_cache = {}
-if 'map_center' not in st.session_state: st.session_state.map_center = [40.4168, -3.7038] 
-if 'map_zoom' not in st.session_state: st.session_state.map_zoom = 13
+# Two independent coordinate states for the two sync groups
+if 'group_a_pos' not in st.session_state: st.session_state.group_a_pos = {"center": [40.4168, -3.7038], "zoom": 13}
+if 'group_b_pos' not in st.session_state: st.session_state.group_b_pos = {"center": [40.4168, -3.7038], "zoom": 13}
 if 'current_bounds' not in st.session_state: st.session_state.current_bounds = None
-if 'app_uuid' not in st.session_state: st.session_state.app_uuid = str(uuid.uuid4())
 
-# --- SIDEBAR: SETTINGS ---
+# --- SIDEBAR ---
 st.sidebar.header("1. Credentials")
 CLIENT_ID = st.sidebar.text_input("Client ID", type="password")
 CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
@@ -30,38 +30,24 @@ CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
 st.sidebar.markdown("---")
 st.sidebar.header("2. Search Area")
 city_name = st.sidebar.text_input("City Name", "Madrid, Spain")
-
-with st.sidebar.expander("📍 Manual Coordinates (Use if Search Fails)"):
-    man_lat = st.number_input("Lat", value=40.4168, format="%.4f")
-    man_lon = st.number_input("Lon", value=-3.7038, format="%.4f")
-    use_manual = st.checkbox("Use manual coordinates")
-
 radius_km = st.sidebar.slider("Radius (km)", 1, 25, 5)
 date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2025, 6, 1), datetime.date(2025, 8, 30)))
 btn_search = st.sidebar.button("🔍 SEARCH IMAGES", type="primary", use_container_width=True)
 
 st.sidebar.markdown("---")
-st.sidebar.header("3. Visualization")
-PRESETS = {
-    "Natural Color (B4, B3, B2)": [2, 1, 0],
-    "False Color NIR (B8, B4, B3)": [3, 2, 1],
-    "Agriculture (B11, B8, B2)": [4, 3, 0],
-    "Custom Selection": "CUSTOM"
-}
-selected_preset = st.sidebar.selectbox("Choose Composition", list(PRESETS.keys()))
-
-BAND_NAMES = {"B02 (Blue)": 0, "B03 (Green)": 1, "B04 (Red)": 2, "B08 (NIR)": 3, "B11 (SWIR1)": 4, "B12 (SWIR2)": 5}
-if selected_preset == "Custom Selection":
-    c1, c2, c3 = st.sidebar.columns(3)
-    rgb_indices = [BAND_NAMES[c1.selectbox("R", list(BAND_NAMES.keys()), index=2)],
-                   BAND_NAMES[c2.selectbox("G", list(BAND_NAMES.keys()), index=1)],
-                   BAND_NAMES[c3.selectbox("B", list(BAND_NAMES.keys()), index=0)]]
-else:
-    rgb_indices = PRESETS[selected_preset]
-
-brightness = st.sidebar.slider("Brightness", 0.5, 5.0, 2.5)
+st.sidebar.header("3. Global View Settings")
+brightness = st.sidebar.slider("Global Brightness", 0.5, 5.0, 2.5)
 opacity = st.sidebar.slider("Satellite Opacity", 0.0, 1.0, 0.8)
-selected_basemap = st.sidebar.selectbox("Map Style", ["OpenStreetMap", "CartoDB Positron", "Esri World Imagery"])
+selected_basemap = st.sidebar.selectbox("Base Map Style", ["OpenStreetMap", "CartoDB Positron", "Esri World Imagery"])
+
+# --- HELPERS ---
+BAND_NAMES = {"B02 (Blue)": 0, "B03 (Green)": 1, "B04 (Red)": 2, "B08 (NIR)": 3, "B11 (SWIR1)": 4, "B12 (SWIR2)": 5}
+PRESETS = {
+    "Natural Color": [2, 1, 0],
+    "False Color NIR": [3, 2, 1],
+    "Agriculture": [4, 3, 0],
+    "Custom": "CUSTOM"
+}
 
 def get_image_url(np_img):
     img = Image.fromarray((np_img * 255).astype(np.uint8))
@@ -69,54 +55,42 @@ def get_image_url(np_img):
     img.save(buffered, format="PNG")
     return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
 
-# --- MAIN LOGIC ---
+# --- SEARCH LOGIC ---
 if CLIENT_ID and CLIENT_SECRET:
     config = SHConfig()
     config.sh_client_id, config.sh_client_secret = CLIENT_ID, CLIENT_SECRET
 
     if btn_search:
-        lat, lon = None, None
-        if use_manual:
-            lat, lon = man_lat, man_lon
-        else:
-            try:
-                geolocator = Nominatim(user_agent=f"sentinel_explorer_{st.session_state.app_uuid}")
-                location = geolocator.geocode(city_name, timeout=10)
-                if location:
-                    lat, lon = location.latitude, location.longitude
-                else:
-                    st.error("Location not found. Try manual coordinates.")
-            except Exception:
-                st.warning("Geocoding Error. Falling back to manual coordinates.")
-                lat, lon = man_lat, man_lon
-
-        if lat is not None:
-            offset = (radius_km / 111.32) / 2
-            st.session_state.current_bounds = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
-            st.session_state.map_center = [lat, lon]
-            catalog = SentinelHubCatalog(config=config)
-            bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
-            search = catalog.search(DataCollection.SENTINEL2_L2A, bbox=bbox_obj,
-                                    time=(str(date_range[0]), str(date_range[1])), filter="eo:cloud_cover < 30")
-            st.session_state.search_results = list(search)
-            st.session_state.image_cache = {} 
+        try:
+            geolocator = Nominatim(user_agent=f"sentinel_sync_{uuid.uuid4()}")
+            location = geolocator.geocode(city_name, timeout=10)
+            if location:
+                lat, lon = location.latitude, location.longitude
+                offset = (radius_km / 111.32) / 2
+                st.session_state.current_bounds = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
+                start_pos = {"center": [lat, lon], "zoom": 13}
+                st.session_state.group_a_pos = start_pos
+                st.session_state.group_b_pos = start_pos
+                
+                catalog = SentinelHubCatalog(config=config)
+                bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
+                search = catalog.search(DataCollection.SENTINEL2_L2A, bbox=bbox_obj,
+                                        time=(str(date_range[0]), str(date_range[1])), filter="eo:cloud_cover < 30")
+                st.session_state.search_results = list(search)
+                st.session_state.image_cache = {} 
+        except Exception as e:
+            st.error(f"Search error: {e}")
 
     if st.session_state.search_results:
-        # DISPLAY TOTAL MAPS FOUND
-        total_found = len(st.session_state.search_results)
-        st.info(f"✅ Total images found for this criteria: **{total_found}**")
-
         results = st.session_state.search_results
+        st.info(f"Total images: {len(results)}")
         date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
-        selected_dates = st.multiselect("Pick 4 dates for comparison:", date_options, default=date_options[:min(len(date_options), 4)])
+        selected_dates = st.multiselect("Pick 4 dates:", date_options, default=date_options[:min(len(date_options), 4)])
 
-        st.markdown("### 🔗 Synchronized View")
-        l_cols = st.columns(4)
-        sync_states = [l_cols[i].checkbox(f"Link Map {i+1}", value=True) for i in range(4)]
-
-        if st.button("🖼️ DOWNLOAD & RENDER", use_container_width=True):
+        if st.button("🖼️ DOWNLOAD DATA", use_container_width=True):
             if len(selected_dates) == 4:
-                lat, lon = st.session_state.map_center
+                # Use Group A center as reference for download
+                lat, lon = st.session_state.group_a_pos["center"]
                 offset = (radius_km / 111.32) / 2
                 bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
                 evalscript = """//VERSION=3
@@ -127,60 +101,61 @@ if CLIENT_ID and CLIENT_SECRET:
                     idx = int(date_str.split(":")[0])
                     actual_date = results[idx]['properties']['datetime']
                     if actual_date not in st.session_state.image_cache:
-                        try:
-                            request = SentinelHubRequest(
-                                evalscript=evalscript,
-                                input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(actual_date, actual_date))],
-                                responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
-                                bbox=bbox_obj, size=(800, 800), config=config)
-                            st.session_state.image_cache[actual_date] = request.get_data()[0]
-                        except Exception as e:
-                            st.error(f"Error fetching data: {e}")
-                            break
+                        request = SentinelHubRequest(evalscript=evalscript,
+                            input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(actual_date, actual_date))],
+                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
+                            bbox=bbox_obj, size=(800, 800), config=config)
+                        st.session_state.image_cache[actual_date] = request.get_data()[0]
 
         if len(st.session_state.image_cache) >= 4:
+            st.markdown("---")
             c_left, c_right = st.columns(2)
+            
             for i, date_str in enumerate(selected_dates):
+                target_col = c_left if i % 2 == 0 else c_right
                 idx = int(date_str.split(":")[0])
                 actual_date = results[idx]['properties']['datetime']
-                if actual_date in st.session_state.image_cache:
-                    data = st.session_state.image_cache[actual_date]
-                    img_rgb = np.clip(data[:, :, rgb_indices] * brightness, 0, 1)
-                    img_url = get_image_url(img_rgb)
+                
+                with target_col:
+                    st.subheader(f"View {i+1} ({actual_date[:10]})")
                     
-                    m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=selected_basemap)
-                    folium.raster_layers.ImageOverlay(image=img_url, bounds=st.session_state.current_bounds, opacity=opacity).add_to(m)
+                    # --- INDEPENDENT CONTROLS PER VIEW ---
+                    exp = st.expander(f"⚙️ Config View {i+1}", expanded=False)
+                    with exp:
+                        sub1, sub2 = st.columns(2)
+                        v_preset = sub1.selectbox("Composition", list(PRESETS.keys()), key=f"pre_{i}")
+                        v_sync = sub2.selectbox("Sync Group", ["None", "Group A", "Group B"], key=f"sync_grp_{i}")
+                        
+                        if v_preset == "Custom":
+                            b1, b2, b3 = st.columns(3)
+                            v_rgb = [BAND_NAMES[b1.selectbox("R", list(BAND_NAMES.keys()), index=2, key=f"r_{i}")],
+                                     BAND_NAMES[b2.selectbox("G", list(BAND_NAMES.keys()), index=1, key=f"g_{i}")],
+                                     BAND_NAMES[b3.selectbox("B", list(BAND_NAMES.keys()), index=0, key=f"b_{i}")]]
+                        else:
+                            v_rgb = PRESETS[v_preset]
+
+                    # Map Initialization
+                    # Pick correct position based on group
+                    pos = st.session_state.group_a_pos if v_sync == "Group A" else st.session_state.group_b_pos if v_sync == "Group B" else {"center": st.session_state.group_a_pos["center"], "zoom": st.session_state.group_a_pos["zoom"]}
                     
-                    with (c_left if i % 2 == 0 else c_right):
-                        st.caption(f"Map {i+1}: {actual_date[:10]}")
+                    m = folium.Map(location=pos["center"], zoom_start=pos["zoom"], tiles=selected_basemap)
+                    
+                    if actual_date in st.session_state.image_cache:
+                        img_rgb = np.clip(st.session_state.image_cache[actual_date][:, :, v_rgb] * brightness, 0, 1)
+                        folium.raster_layers.ImageOverlay(image=get_image_url(img_rgb), bounds=st.session_state.current_bounds, opacity=opacity).add_to(m)
+
+                    m_out = st_folium(m, height=350, width=550, key=f"v_map_{i}_{actual_date}", returned_objects=["center", "zoom"])
+
+                    # --- ADVANCED SYNC ENGINE ---
+                    if m_out and m_out.get('center') and v_sync != "None":
+                        new_lat, new_lng, new_z = round(m_out['center']['lat'], 4), round(m_out['center']['lng'], 4), m_out['zoom']
                         
-                        # Render the map (debounce removed to fix TypeError)
-                        m_out = st_folium(
-                            m, 
-                            height=350, 
-                            width=500, 
-                            key=f"smooth_v6_{actual_date}",
-                            returned_objects=["center", "zoom"], # Only track these two for better speed
-                            use_container_width=True
-                        )
+                        # Determine which state to update
+                        state_key = 'group_a_pos' if v_sync == "Group A" else 'group_b_pos'
+                        curr_pos = st.session_state[state_key]
                         
-                        # SYNC LOGIC
-                        if m_out and m_out.get('center') and sync_states[i]:
-                            new_lat = round(m_out['center']['lat'], 4)
-                            new_lng = round(m_out['center']['lng'], 4)
-                            new_zoom = m_out['zoom']
-                            
-                            curr_lat = round(st.session_state.map_center[0], 4)
-                            curr_lng = round(st.session_state.map_center[1], 4)
-                            
-                            # We increase the threshold slightly to 0.001 (~100 meters)
-                            # This makes the sync feel much "calmer" and less twitchy
-                            if (abs(new_lat - curr_lat) > 0.001 or 
-                                abs(new_lng - curr_lng) > 0.001 or 
-                                new_zoom != st.session_state.map_zoom):
-                                
-                                st.session_state.map_center = [new_lat, new_lng]
-                                st.session_state.map_zoom = new_zoom
-                                st.rerun()
+                        if (abs(new_lat - curr_pos["center"][0]) > 0.001 or new_z != curr_pos["zoom"]):
+                            st.session_state[state_key] = {"center": [new_lat, new_lng], "zoom": new_z}
+                            st.rerun()
 else:
-    st.info("👋 Welcome! Please enter credentials in the sidebar to begin.")
+    st.info("👋 Enter credentials to begin.")
