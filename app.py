@@ -222,7 +222,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 elif target_idx == "NDWI": val = (B3 - B8) / (B3 + B8 + 1e-8)
                 else: val = (B11 - B8) / (B11 + B8 + 1e-8)
 
-                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "coolwarm", "Spectral"], index=0)
+                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "Spectral", "Greys", "Purples", "Blues", "Greens", "Oranges", "Reds", "YlOrBr", "YlOrRd", "OrRd", "PuRd", "RdPu", "BuPu", "GnBu", "PuBu", "YlGnBu", "PuBuGn", "BuGn", "YlG"], index=0)
                 
                 st.markdown("---")
                 st.subheader("🔦 Masking")
