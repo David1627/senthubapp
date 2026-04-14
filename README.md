@@ -47,4 +47,14 @@ Note: Required libraries include streamlit, sentinelhub, folium, streamlit-foliu
 
 streamlit run app.py
 
+**Science Behind the Indices**
+The Analysis Lab utilizes the following formulas to transform raw satellite data into actionable insights:
+
+<img width="1729" height="581" alt="image" src="https://github.com/user-attachments/assets/e9ecc9bd-90c4-4cff-8ea2-abc4f7a40ae2" />
+
+**User Interface Preview**
+**Dashboard Tab:** A layout optimized for side-by-side time-lapse comparison.
+
+**Analysis Tab:** A scientific workspace with colormap selectors and pixel-distribution histograms.
+
 
