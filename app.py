@@ -153,16 +153,18 @@ if CLIENT_ID and CLIENT_SECRET:
                     
                     with (c_left if i % 2 == 0 else c_right):
                         st.caption(f"Map {i+1}: {actual_date[:10]}")
-                        # SMOOTH SYNC INTEGRATION
+                        
+                        # Render the map (debounce removed to fix TypeError)
                         m_out = st_folium(
                             m, 
                             height=350, 
                             width=500, 
-                            key=f"smooth_v5_{actual_date}",
-                            returned_objects=["center", "zoom"],
-                            debounce=200 # Prevents stuttering during drag
+                            key=f"smooth_v6_{actual_date}",
+                            returned_objects=["center", "zoom"], # Only track these two for better speed
+                            use_container_width=True
                         )
                         
+                        # SYNC LOGIC
                         if m_out and m_out.get('center') and sync_states[i]:
                             new_lat = round(m_out['center']['lat'], 4)
                             new_lng = round(m_out['center']['lng'], 4)
@@ -171,9 +173,10 @@ if CLIENT_ID and CLIENT_SECRET:
                             curr_lat = round(st.session_state.map_center[0], 4)
                             curr_lng = round(st.session_state.map_center[1], 4)
                             
-                            # Threshold check to filter out micro-movements
-                            if (abs(new_lat - curr_lat) > 0.0005 or 
-                                abs(new_lng - curr_lng) > 0.0005 or 
+                            # We increase the threshold slightly to 0.001 (~100 meters)
+                            # This makes the sync feel much "calmer" and less twitchy
+                            if (abs(new_lat - curr_lat) > 0.001 or 
+                                abs(new_lng - curr_lng) > 0.001 or 
                                 new_zoom != st.session_state.map_zoom):
                                 
                                 st.session_state.map_center = [new_lat, new_lng]
