@@ -3,3 +3,5 @@ sentinelhub
 matplotlib
 numpy
 geopy
+streamlit-folium
+folium
