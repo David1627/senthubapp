@@ -1,0 +1,5 @@
+streamlit
+sentinelhub
+matplotlib
+numpy
+geopy
