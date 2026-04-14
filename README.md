@@ -30,3 +30,21 @@ Feature Masking: Use dynamic threshold sliders to isolate specific landscape fea
 Layer Blending: Overlay spectral heatmaps on top of natural color imagery with adjustable transparency.
 
 Statistical Reporting: Real-time histograms and site metadata (Season, Cloud Cover, Mean Pixel Intensity).
+
+
+**Installation & Setup**
+1. Prerequisites
+Ensure you have a Sentinel Hub account. You will need your Client ID and Client Secret from the Sentinel Hub Dashboard.
+
+2. Install Dependencies
+Clone this repository and install the required Python libraries:
+
+git clone https://github.com/your-username/sentinel-explorer-pro.git
+cd sentinel-explorer-pro
+pip install -r requirements.txt
+
+Note: Required libraries include streamlit, sentinelhub, folium, streamlit-folium, matplotlib, pandas, and geopy
+
+streamlit run app.py
+
+
