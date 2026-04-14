@@ -225,7 +225,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 s2.metric("Max Intensity", f"{np.max(clean_data):.3f}")
                 s3.metric("Pixel Count", f"{len(clean_data):,}")
 
-                fig_h, ax_h = plt.subplots(figsize=(8, 2))
+                fig_h, ax_h = plt.subplots(figsize=(4, 2))
                 ax_h.hist(clean_data, bins=80, color='gray', alpha=0.5)
                 ax_h.set_title(f"Histogram: {target_idx}")
                 st.pyplot(fig_h)
