@@ -13,47 +13,55 @@ from PIL import Image
 # --- PAGE CONFIG ---
 st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro")
 
-# --- INITIALIZE SESSION STATE ---
-if 'search_results' not in st.session_state:
-    st.session_state.search_results = None
-if 'image_cache' not in st.session_state:
-    st.session_state.image_cache = {}
-if 'map_center' not in st.session_state:
-    st.session_state.map_center = [40.4168, -3.7038] 
-if 'map_zoom' not in st.session_state:
-    st.session_state.map_zoom = 13
-if 'current_bounds' not in st.session_state:
-    st.session_state.current_bounds = None
+# --- SESSION STATE ---
+if 'search_results' not in st.session_state: st.session_state.search_results = None
+if 'image_cache' not in st.session_state: st.session_state.image_cache = {}
+if 'map_center' not in st.session_state: st.session_state.map_center = [40.4168, -3.7038] 
+if 'map_zoom' not in st.session_state: st.session_state.map_zoom = 13
+if 'current_bounds' not in st.session_state: st.session_state.current_bounds = None
 
-# --- SIDEBAR ---
+# --- SIDEBAR: SETTINGS ---
 st.sidebar.header("1. Credentials")
-CLIENT_ID = st.sidebar.text_input("Client ID", type="password", key="cid")
-CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password", key="cs")
+CLIENT_ID = st.sidebar.text_input("Client ID", type="password")
+CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Search Area")
 city_name = st.sidebar.text_input("City Name", "Madrid, Spain")
 radius_km = st.sidebar.slider("Radius (km)", 1, 25, 5)
 date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2025, 6, 1), datetime.date(2025, 8, 30)))
-
-# THE TRIGGER
 btn_search = st.sidebar.button("🔍 SEARCH IMAGES", type="primary", use_container_width=True)
 
 st.sidebar.markdown("---")
-st.sidebar.header("3. Display Settings")
-BASEMAPS = {
-    "OpenStreetMap": "OpenStreetMap",
-    "CartoDB Positron": "CartoDB positron",
-    "CartoDB Dark Matter": "CartoDB dark_matter",
-    "Esri World Imagery": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-}
-selected_basemap = st.sidebar.selectbox("Base Map", list(BASEMAPS.keys()))
-show_labels = st.sidebar.checkbox("Show Labels", value=True)
-opacity = st.sidebar.slider("Layer Opacity", 0.0, 1.0, 0.8)
-brightness = st.sidebar.slider("Brightness", 0.5, 5.0, 2.5)
+st.sidebar.header("3. Band Composition")
 
-BANDS_MAP = {"Natural Color": [3, 2, 1], "False Color (NIR)": [7, 3, 2], "Shortwave Infrared": [11, 7, 3]}
-selected_combo = st.sidebar.selectbox("Band Combination", list(BANDS_MAP.keys()))
+# Preset Options + Custom Freedom
+PRESETS = {
+    "Natural Color (B4, B3, B2)": [2, 1, 0],
+    "False Color NIR (B8, B4, B3)": [3, 2, 1],
+    "Agriculture (B11, B8, B2)": [4, 3, 0],
+    "Custom Selection": "CUSTOM"
+}
+selected_preset = st.sidebar.selectbox("Choose Composition", list(PRESETS.keys()))
+
+# Custom Band Logic
+# Map of our 6 downloaded bands: [B02, B03, B04, B08, B11, B12]
+BAND_NAMES = {"B02 (Blue)": 0, "B03 (Green)": 1, "B04 (Red)": 2, "B08 (NIR)": 3, "B11 (SWIR1)": 4, "B12 (SWIR2)": 5}
+if selected_preset == "Custom Selection":
+    c1, c2, c3 = st.sidebar.columns(3)
+    r_custom = c1.selectbox("R", list(BAND_NAMES.keys()), index=2)
+    g_custom = c2.selectbox("G", list(BAND_NAMES.keys()), index=1)
+    b_custom = c3.selectbox("B", list(BAND_NAMES.keys()), index=0)
+    rgb_indices = [BAND_NAMES[r_custom], BAND_NAMES[g_custom], BAND_NAMES[b_custom]]
+else:
+    rgb_indices = PRESETS[selected_preset]
+
+brightness = st.sidebar.slider("Brightness", 0.5, 5.0, 2.5)
+opacity = st.sidebar.slider("Satellite Opacity", 0.0, 1.0, 0.8)
+
+st.sidebar.markdown("---")
+st.sidebar.header("4. Base Map")
+selected_basemap = st.sidebar.selectbox("Map Style", ["OpenStreetMap", "CartoDB Positron", "Esri World Imagery"])
 
 # --- HELPERS ---
 def get_image_url(np_img):
@@ -62,82 +70,67 @@ def get_image_url(np_img):
     img.save(buffered, format="PNG")
     return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
 
-# --- LOGIC ---
+# --- MAIN LOGIC ---
 if CLIENT_ID and CLIENT_SECRET:
     config = SHConfig()
     config.sh_client_id, config.sh_client_secret = CLIENT_ID, CLIENT_SECRET
 
-    # EXECUTE SEARCH
     if btn_search:
         try:
-            geolocator = Nominatim(user_agent="sentinel_explorer_v2")
+            geolocator = Nominatim(user_agent="sentinel_explorer_v3")
             location = geolocator.geocode(city_name, timeout=10)
             if location:
                 lat, lon = location.latitude, location.longitude
                 offset = (radius_km / 111.32) / 2
                 st.session_state.current_bounds = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
                 st.session_state.map_center = [lat, lon]
-                
                 catalog = SentinelHubCatalog(config=config)
                 bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
                 search = catalog.search(DataCollection.SENTINEL2_L2A, bbox=bbox_obj,
                                         time=(str(date_range[0]), str(date_range[1])), filter="eo:cloud_cover < 30")
                 st.session_state.search_results = list(search)
-                st.session_state.image_cache = {} # Reset images for new location
+                st.session_state.image_cache = {} 
             else:
                 st.error("Location not found.")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Geocoding error: {e}")
 
-    # UI PART 2: SHOW RESULTS (Always visible if results exist)
     if st.session_state.search_results:
-        st.subheader("Comparison Dashboard")
         results = st.session_state.search_results
-        date_options = [f"{i}: {r['properties']['datetime'][:10]} (Cloud: {r['properties']['eo:cloud_cover']}%)" for i, r in enumerate(results)]
-        
-        selected_dates = st.multiselect("Pick 4 dates for the quadrant view:", date_options, default=date_options[:min(len(date_options), 4)])
+        date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
+        selected_dates = st.multiselect("Pick 4 dates:", date_options, default=date_options[:min(len(date_options), 4)])
 
-        # Sync Toggle
-        st.markdown("### 🔗 Sync Maps")
+        st.markdown("### 🔗 Map Synchronization")
         l_cols = st.columns(4)
-        sync_1 = l_cols[0].checkbox("Sync 1", value=True)
-        sync_2 = l_cols[1].checkbox("Sync 2", value=True)
-        sync_3 = l_cols[2].checkbox("Sync 3", value=True)
-        sync_4 = l_cols[3].checkbox("Sync 4", value=True)
-        sync_states = [sync_1, sync_2, sync_3, sync_4]
+        sync_states = [l_cols[i].checkbox(f"Link {i+1}", value=True) for i in range(4)]
 
-        # DOWNLOAD BUTTON
-        if st.button("🖼️ LOAD SATELLITE DATA", use_container_width=True):
+        if st.button("🖼️ DOWNLOAD & RENDER", use_container_width=True):
             if len(selected_dates) == 4:
                 lat, lon = st.session_state.map_center
                 offset = (radius_km / 111.32) / 2
                 bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
                 
-                evalscript = "//VERSION=3\nfunction setup() { return { input: ['B02','B03','B04','B08','B11','B12'], output: { bands: 6, sampleType: 'FLOAT32' } }; }\nfunction evaluatePixel(sample) { return [sample.B02, sample.B03, sample.B04, sample.B08, sample.B11, sample.B12]; }"
+                # Fetching 6 core bands to allow custom switching without re-downloading
+                evalscript = """//VERSION=3
+                function setup() { return { input: ['B02','B03','B04','B08','B11','B12'], output: { bands: 6, sampleType: 'FLOAT32' } }; }
+                function evaluatePixel(sample) { return [sample.B02, sample.B03, sample.B04, sample.B08, sample.B11, sample.B12]; }"""
                 
                 for date_str in selected_dates:
                     idx = int(date_str.split(":")[0])
                     actual_date = results[idx]['properties']['datetime']
                     if actual_date not in st.session_state.image_cache:
-                        with st.spinner(f"Fetching {actual_date[:10]}..."):
+                        try:
                             request = SentinelHubRequest(
                                 evalscript=evalscript,
                                 input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(actual_date, actual_date))],
                                 responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
                                 bbox=bbox_obj, size=(800, 800), config=config)
                             st.session_state.image_cache[actual_date] = request.get_data()[0]
+                        except Exception as e:
+                            st.error(f"Rate limit or API error: {e}. Wait 1 minute.")
+                            break
 
-        # QUADRANT RENDERING
         if len(st.session_state.image_cache) >= 4:
-            # Map band names to our reduced 6-band request: [B02, B03, B04, B08, B11, B12]
-            # Indices: B02=0, B03=1, B04=2, B08=3, B11=4, B12=5
-            COMBO_MAP = {
-                "Natural Color": [2, 1, 0],       # B04, B03, B02
-                "False Color (NIR)": [3, 2, 1],   # B08, B04, B03
-                "Shortwave Infrared": [5, 4, 3]   # B12, B11, B08
-            }
-            rgb_indices = COMBO_MAP[selected_combo]
-            
             c_left, c_right = st.columns(2)
             for i, date_str in enumerate(selected_dates):
                 idx = int(date_str.split(":")[0])
@@ -145,27 +138,17 @@ if CLIENT_ID and CLIENT_SECRET:
                 
                 if actual_date in st.session_state.image_cache:
                     data = st.session_state.image_cache[actual_date]
+                    # This line applies the band selection locally (No API call!)
                     img_rgb = np.clip(data[:, :, rgb_indices] * brightness, 0, 1)
                     img_url = get_image_url(img_rgb)
 
-                    # Basemap logic
-                    tile_url = BASEMAPS[selected_basemap]
-                    m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom)
-                    if "http" in tile_url:
-                        folium.TileLayer(tiles=tile_url, attr=selected_basemap).add_to(m)
-                    else:
-                        folium.TileLayer(tile_url).add_to(m)
-                    
-                    if show_labels:
-                        folium.TileLayer(tiles="https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png", attr="Labels", overlay=True).add_to(m)
-
+                    m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=selected_basemap)
                     folium.raster_layers.ImageOverlay(image=img_url, bounds=st.session_state.current_bounds, opacity=opacity).add_to(m)
                     
                     with (c_left if i % 2 == 0 else c_right):
                         st.caption(f"Map {i+1}: {actual_date[:10]}")
-                        m_out = st_folium(m, height=350, width=550, key=f"quad_{actual_date}")
+                        m_out = st_folium(m, height=350, width=500, key=f"v4_{actual_date}")
                         
-                        # Sync Logic
                         if m_out and m_out.get('center') and sync_states[i]:
                             new_c = [m_out['center']['lat'], m_out['center']['lng']]
                             new_z = m_out['zoom']
@@ -173,8 +156,5 @@ if CLIENT_ID and CLIENT_SECRET:
                                 st.session_state.map_center = new_c
                                 st.session_state.map_zoom = new_z
                                 st.rerun()
-
-    elif not CLIENT_ID or not CLIENT_SECRET:
-        st.info("👋 Welcome! Please enter your credentials in the sidebar to get started.")
-    else:
-        st.info("👈 Enter a city and click **SEARCH IMAGES**.")
+else:
+    st.info("👋 Please enter credentials in the sidebar.")
