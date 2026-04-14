@@ -94,142 +94,145 @@ if CLIENT_ID and CLIENT_SECRET:
             st.session_state.search_results = list(search)
             st.session_state.image_cache = {}
 
-# --- NAVIGATION ---
-tab_map, tab_analysis = st.tabs(["🗺️ Comparison Dashboard", "🧪 Analysis Lab"])
+    # --- NAVIGATION ---
+    tab_map, tab_analysis = st.tabs(["🗺️ Comparison Dashboard", "🧪 Analysis Lab"])
 
-with tab_map:
-    if st.session_state.search_results:
-        results = st.session_state.search_results
-        st.info(f"Total Images Found: {len(results)}")
-        date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
-        selected_dates = st.multiselect("Pick 4 dates for comparison:", date_options, default=date_options[:min(len(date_options), 4)])
+    with tab_map:
+        if st.session_state.search_results:
+            results = st.session_state.search_results
+            st.info(f"Total Images Found: {len(results)}")
+            date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
+            selected_dates = st.multiselect("Pick 4 dates for comparison:", date_options, default=date_options[:min(len(date_options), 4)])
 
-        if st.button("🖼️ RENDER QUADRANTS", use_container_width=True):
-            if len(selected_dates) == 4:
-                lat, lon = st.session_state.group_a_pos["center"]
-                offset = (radius_km / 111.32) / 2
-                bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
-                evalscript = """//VERSION=3
-                function setup() { return { input: ['B02','B03','B04','B08','B11','B12'], output: { bands: 6, sampleType: 'FLOAT32' } }; }
-                function evaluatePixel(sample) { return [sample.B02, sample.B03, sample.B04, sample.B08, sample.B11, sample.B12]; }"""
-                
-                for d_str in selected_dates:
-                    idx = int(d_str.split(":")[0])
-                    actual_date = results[idx]['properties']['datetime']
-                    if actual_date not in st.session_state.image_cache:
-                        request = SentinelHubRequest(evalscript=evalscript,
-                            input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(actual_date, actual_date))],
-                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
-                            bbox=bbox_obj, size=(800, 800), config=config)
-                        st.session_state.image_cache[actual_date] = request.get_data()[0]
-
-        if len(st.session_state.image_cache) >= 4:
-            c_left, c_right = st.columns(2)
-            for i, date_str in enumerate(selected_dates):
-                target_col = c_left if i % 2 == 0 else c_right
-                actual_date = results[int(date_str.split(":")[0])]['properties']['datetime']
-                
-                with target_col:
-                    with st.expander(f"⚙️ View {i+1} Setup", expanded=False):
-                        v_preset = st.selectbox("Composition", list(PRESETS.keys()), key=f"p{i}")
-                        v_sync = st.selectbox("Sync Group", ["None", "Group A", "Group B"], key=f"s{i}")
-                        v_rgb = PRESETS[v_preset] if v_preset != "Custom" else [BAND_NAMES[st.selectbox("R", list(BAND_NAMES.keys()), index=2, key=f"r{i}")], BAND_NAMES[st.selectbox("G", list(BAND_NAMES.keys()), index=1, key=f"g{i}")], BAND_NAMES[st.selectbox("B", list(BAND_NAMES.keys()), index=0, key=f"b{i}")]]
-
-                    pos = st.session_state.group_a_pos if v_sync == "Group A" else st.session_state.group_b_pos if v_sync == "Group B" else st.session_state.group_a_pos
-                    m = folium.Map(location=pos["center"], zoom_start=pos["zoom"], tiles=selected_basemap)
+            if st.button("🖼️ RENDER QUADRANTS", use_container_width=True):
+                if len(selected_dates) == 4:
+                    lat, lon = st.session_state.group_a_pos["center"]
+                    offset = (radius_km / 111.32) / 2
+                    bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
+                    evalscript = """//VERSION=3
+                    function setup() { return { input: ['B02','B03','B04','B08','B11','B12'], output: { bands: 6, sampleType: 'FLOAT32' } }; }
+                    function evaluatePixel(sample) { return [sample.B02, sample.B03, sample.B04, sample.B08, sample.B11, sample.B12]; }"""
                     
-                    data = st.session_state.image_cache[actual_date]
-                    img_rgb = np.clip(data[:, :, v_rgb] * brightness, 0, 1)
-                    folium.raster_layers.ImageOverlay(image=get_image_url(img_rgb), bounds=st.session_state.current_bounds, opacity=opacity).add_to(m)
+                    for d_str in selected_dates:
+                        idx = int(d_str.split(":")[0])
+                        actual_date = results[idx]['properties']['datetime']
+                        if actual_date not in st.session_state.image_cache:
+                            request = SentinelHubRequest(evalscript=evalscript,
+                                input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(actual_date, actual_date))],
+                                responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
+                                bbox=bbox_obj, size=(800, 800), config=config)
+                            st.session_state.image_cache[actual_date] = request.get_data()[0]
+
+            if len(st.session_state.image_cache) >= 4:
+                c_left, c_right = st.columns(2)
+                for i, date_str in enumerate(selected_dates):
+                    target_col = c_left if i % 2 == 0 else c_right
+                    actual_date = results[int(date_str.split(":")[0])]['properties']['datetime']
                     
-                    m_out = st_folium(m, height=350, width=550, key=f"v6_{i}_{actual_date}", returned_objects=["center", "zoom"])
+                    with target_col:
+                        with st.expander(f"⚙️ View {i+1} Setup", expanded=False):
+                            v_preset = st.selectbox("Composition", list(PRESETS.keys()), key=f"p{i}")
+                            v_sync = st.selectbox("Sync Group", ["None", "Group A", "Group B"], key=f"s{i}")
+                            if v_preset == "Custom":
+                                v_rgb = [BAND_NAMES[st.selectbox("R", list(BAND_NAMES.keys()), index=2, key=f"r{i}")], 
+                                         BAND_NAMES[st.selectbox("G", list(BAND_NAMES.keys()), index=1, key=f"g{i}")], 
+                                         BAND_NAMES[st.selectbox("B", list(BAND_NAMES.keys()), index=0, key=f"b{i}")]]
+                            else:
+                                v_rgb = PRESETS[v_preset]
 
-                    if m_out and m_out.get('center') and v_sync != "None":
-                        new_lat, new_lng, new_z = round(m_out['center']['lat'], 4), round(m_out['center']['lng'], 4), m_out['zoom']
-                        sk = 'group_a_pos' if v_sync == "Group A" else 'group_b_pos'
-                        if abs(new_lat - st.session_state[sk]["center"][0]) > 0.001 or new_z != st.session_state[sk]["zoom"]:
-                            st.session_state[sk] = {"center": [new_lat, new_lng], "zoom": new_z}
-                            st.rerun()
+                        pos = st.session_state.group_a_pos if v_sync == "Group A" else st.session_state.group_b_pos if v_sync == "Group B" else st.session_state.group_a_pos
+                        m = folium.Map(location=pos["center"], zoom_start=pos["zoom"], tiles=selected_basemap)
+                        
+                        data = st.session_state.image_cache[actual_date]
+                        img_rgb = np.clip(data[:, :, v_rgb] * brightness, 0, 1)
+                        folium.raster_layers.ImageOverlay(image=get_image_url(img_rgb), bounds=st.session_state.current_bounds, opacity=opacity).add_to(m)
+                        
+                        m_out = st_folium(m, height=350, width=550, key=f"v6_{i}_{actual_date}", returned_objects=["center", "zoom"])
 
-with tab_analysis:
-    if not st.session_state.image_cache:
-        st.warning("⚠️ Please download data in the Dashboard tab first.")
-    else:
-        # TOP BAR: SITE INTEL
-        ana_date_str = st.selectbox("📅 Select Capture Date", list(st.session_state.image_cache.keys()), key="lab_date")
-        dt_obj = datetime.datetime.fromisoformat(ana_date_str.replace('Z', '+00:00'))
-        
-        st.markdown(f"## 🏛️ Analysis Lab: {city_name}")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Capture Date", dt_obj.strftime("%d %b %Y"))
-        m2.metric("Local Season", get_season(dt_obj.month))
-        m3.metric("Cloud Cover", f"{st.session_state.search_results[0]['properties'].get('eo:cloud_cover', 'N/A')}%")
-        m4.metric("Sensor", "Sentinel-2 L2A")
+                        if m_out and m_out.get('center') and v_sync != "None":
+                            new_lat, new_lng, new_z = round(m_out['center']['lat'], 4), round(m_out['center']['lng'], 4), m_out['zoom']
+                            sk = 'group_a_pos' if v_sync == "Group A" else 'group_b_pos'
+                            if abs(new_lat - st.session_state[sk]["center"][0]) > 0.001 or new_z != st.session_state[sk]["zoom"]:
+                                st.session_state[sk] = {"center": [new_lat, new_lng], "zoom": new_z}
+                                st.rerun()
 
-        st.markdown("---")
-        data = st.session_state.image_cache[ana_date_str]
-        B3, B4, B8, B11 = data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4]
-
-        col_sidebar, col_main = st.columns([1, 3])
-
-        with col_sidebar:
-            st.subheader("🛠️ Parameters")
-            target_idx = st.selectbox("Index", ["NDVI (Veg)", "NDMI (Moist)", "NDWI (Water)", "NDBI (Urban)"])
+    with tab_analysis:
+        if not st.session_state.image_cache:
+            st.warning("⚠️ Please download data in the Dashboard tab first.")
+        else:
+            ana_date_str = st.selectbox("📅 Select Capture Date", list(st.session_state.image_cache.keys()), key="lab_date")
+            dt_obj = datetime.datetime.fromisoformat(ana_date_str.replace('Z', '+00:00'))
             
-            if "NDVI" in target_idx:
-                val = (B8 - B4) / (B8 + B4 + 1e-8)
-                cmap_def = "RdYlGn"
-            elif "NDMI" in target_idx:
-                val = (B8 - B11) / (B8 + B11 + 1e-8)
-                cmap_def = "coolwarm"
-            elif "NDWI" in target_idx:
-                val = (B3 - B8) / (B3 + B8 + 1e-8)
-                cmap_def = "Blues"
-            else:
-                val = (B11 - B8) / (B11 + B8 + 1e-8)
-                cmap_def = "YlOrRd"
-
-            cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "Spectral"], index=0)
-            
-            st.markdown("---")
-            st.subheader("🔦 Feature Masking")
-            min_mask, max_mask = st.slider("Index Range", -1.0, 1.0, (-1.0, 1.0))
-            masked_val = np.copy(val)
-            masked_val[(val < min_mask) | (val > max_mask)] = np.nan
+            st.markdown(f"## 🏛️ Analysis Lab: {city_name}")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Capture Date", dt_obj.strftime("%d %b %Y"))
+            m2.metric("Local Season", get_season(dt_obj.month))
+            m3.metric("Cloud Cover", f"{st.session_state.search_results[0]['properties'].get('eo:cloud_cover', 'N/A')}%")
+            m4.metric("Sensor", "Sentinel-2 L2A")
 
             st.markdown("---")
-            st.subheader("🖼️ Blending")
-            show_overlay = st.checkbox("Overlay on Base Map", value=False)
-            overlay_alpha = st.slider("Transparency", 0.0, 1.0, 0.5) if show_overlay else 1.0
+            data = st.session_state.image_cache[ana_date_str]
+            B3, B4, B8, B11 = data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4]
 
-        with col_main:
-            fig, ax = plt.subplots(figsize=(10, 7))
-            if show_overlay:
-                ax.imshow(np.clip(data[:, :, [2, 1, 0]] * brightness, 0, 1))
-                im = ax.imshow(masked_val, cmap=cmap_sel, alpha=overlay_alpha, vmin=-1, vmax=1)
-            else:
-                im = ax.imshow(masked_val, cmap=cmap_sel, vmin=-1, vmax=1)
-            
-            plt.colorbar(im, fraction=0.046, pad=0.04)
-            ax.axis('off')
-            st.pyplot(fig)
+            col_sidebar, col_main = st.columns([1, 3])
 
-            # STATS
-            st.markdown("### 📊 Distribution & Statistics")
-            s1, s2, s3 = st.columns(3)
-            clean_data = val[~np.isnan(val)]
-            s1.metric("Mean Value", f"{np.mean(clean_data):.3f}")
-            s2.metric("Max Intensity", f"{np.max(clean_data):.3f}")
-            s3.metric("Pixel Count", f"{len(clean_data):,}")
+            with col_sidebar:
+                st.subheader("🛠️ Parameters")
+                target_idx = st.selectbox("Index", ["NDVI (Veg)", "NDMI (Moist)", "NDWI (Water)", "NDBI (Urban)"])
+                
+                if "NDVI" in target_idx:
+                    val = (B8 - B4) / (B8 + B4 + 1e-8)
+                    cmap_def = "RdYlGn"
+                elif "NDMI" in target_idx:
+                    val = (B8 - B11) / (B8 + B11 + 1e-8)
+                    cmap_def = "coolwarm"
+                elif "NDWI" in target_idx:
+                    val = (B3 - B8) / (B3 + B8 + 1e-8)
+                    cmap_def = "Blues"
+                else:
+                    val = (B11 - B8) / (B11 + B8 + 1e-8)
+                    cmap_def = "YlOrRd"
 
-            fig_h, ax_h = plt.subplots(figsize=(8, 2))
-            ax_h.hist(clean_data, bins=80, color='gray', alpha=0.5)
-            ax_h.set_title(f"Histogram: {target_idx}")
-            st.pyplot(fig_h)
-            
-            with st.expander("🔬 Formula & Guidance"):
-                st.latex(r"Index = \frac{Band A - Band B}{Band A + Band B}")
-                st.write("Use the masking slider to isolate specific features like dense urban areas or water bodies.")
+                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "Spectral"], index=0)
+                
+                st.markdown("---")
+                st.subheader("🔦 Feature Masking")
+                min_mask, max_mask = st.slider("Index Range", -1.0, 1.0, (-1.0, 1.0))
+                masked_val = np.copy(val)
+                masked_val[(val < min_mask) | (val > max_mask)] = np.nan
+
+                st.markdown("---")
+                st.subheader("🖼️ Blending")
+                show_overlay = st.checkbox("Overlay on Base Map", value=False)
+                overlay_alpha = st.slider("Transparency", 0.0, 1.0, 0.5) if show_overlay else 1.0
+
+            with col_main:
+                fig, ax = plt.subplots(figsize=(10, 7))
+                if show_overlay:
+                    ax.imshow(np.clip(data[:, :, [2, 1, 0]] * brightness, 0, 1))
+                    im = ax.imshow(masked_val, cmap=cmap_sel, alpha=overlay_alpha, vmin=-1, vmax=1)
+                else:
+                    im = ax.imshow(masked_val, cmap=cmap_sel, vmin=-1, vmax=1)
+                
+                plt.colorbar(im, fraction=0.046, pad=0.04)
+                ax.axis('off')
+                st.pyplot(fig)
+
+                st.markdown("### 📊 Distribution & Statistics")
+                s1, s2, s3 = st.columns(3)
+                clean_data = val[~np.isnan(val)]
+                s1.metric("Mean Value", f"{np.mean(clean_data):.3f}")
+                s2.metric("Max Intensity", f"{np.max(clean_data):.3f}")
+                s3.metric("Pixel Count", f"{len(clean_data):,}")
+
+                fig_h, ax_h = plt.subplots(figsize=(8, 2))
+                ax_h.hist(clean_data, bins=80, color='gray', alpha=0.5)
+                ax_h.set_title(f"Histogram: {target_idx}")
+                st.pyplot(fig_h)
+                
+                with st.expander("🔬 Formula & Guidance"):
+                    st.latex(r"Index = \frac{Band A - Band B}{Band A + Band B}")
+                    st.write("Use the masking slider to isolate specific features like dense urban areas or water bodies.")
 
 else:
     st.info("👋 Enter your Client ID and Secret in the sidebar to start exploring.")
