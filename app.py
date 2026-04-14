@@ -193,7 +193,7 @@ if CLIENT_ID and CLIENT_SECRET:
                     val = (B11 - B8) / (B11 + B8 + 1e-8)
                     cmap_def = "YlOrRd"
 
-                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "Spectral"], index=0)
+                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "Spectral", "Greys", "Purples", "Blues", "Greens", "Oranges", "Reds", "YlOrBr", "YlOrRd", "OrRd", "PuRd", "RdPu", "BuPu", "GnBu", "PuBu", "YlGnBu", "PuBuGn", "BuGn", "YlG"], index=0)
                 
                 st.markdown("---")
                 st.subheader("🔦 Feature Masking")
@@ -207,7 +207,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 overlay_alpha = st.slider("Transparency", 0.0, 1.0, 0.5) if show_overlay else 1.0
 
             with col_main:
-                fig, ax = plt.subplots(figsize=(10, 7))
+                fig, ax = plt.subplots(figsize=(6, 3))
                 if show_overlay:
                     ax.imshow(np.clip(data[:, :, [2, 1, 0]] * brightness, 0, 1))
                     im = ax.imshow(masked_val, cmap=cmap_sel, alpha=overlay_alpha, vmin=-1, vmax=1)
@@ -225,8 +225,8 @@ if CLIENT_ID and CLIENT_SECRET:
                 s2.metric("Max Intensity", f"{np.max(clean_data):.3f}")
                 s3.metric("Pixel Count", f"{len(clean_data):,}")
 
-                fig_h, ax_h = plt.subplots(figsize=(4, 2))
-                ax_h.hist(clean_data, bins=80, color='gray', alpha=0.5)
+                fig_h, ax_h = plt.subplots(figsize=(3, 1.5))
+                ax_h.hist(clean_data, bins=50, color='blue', alpha=0.8)
                 ax_h.set_title(f"Histogram: {target_idx}")
                 st.pyplot(fig_h)
                 
