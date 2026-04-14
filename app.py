@@ -12,10 +12,12 @@ import base64
 from io import BytesIO
 from PIL import Image
 import uuid
-import tifffile # Ensure you have this: pip install tifffile
+import rasterio
+from rasterio.transform import from_bounds
+from rasterio.io import MemoryFile
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro V7", page_icon="🌍")
+st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro V7.1", page_icon="🌍")
 
 # --- INITIALIZE SESSION STATE ---
 if 'search_results' not in st.session_state: st.session_state.search_results = None
@@ -24,6 +26,7 @@ if 'group_a_pos' not in st.session_state: st.session_state.group_a_pos = {"cente
 if 'group_b_pos' not in st.session_state: st.session_state.group_b_pos = {"center": [40.4168, -3.7038], "zoom": 13}
 if 'current_bounds' not in st.session_state: st.session_state.current_bounds = None
 if 'app_uuid' not in st.session_state: st.session_state.app_uuid = str(uuid.uuid4())
+if 'last_search_coords' not in st.session_state: st.session_state.last_search_coords = None
 
 # --- HELPER FUNCTIONS ---
 def get_image_url(np_img):
@@ -38,17 +41,43 @@ def get_season(month):
     if month in [6, 7, 8]: return "Summer ☀️"
     return "Autumn 🍂"
 
-def create_tiff_download(data, filename):
-    """Creates a download button for a GeoTIFF (simulated via tifffile)"""
-    buffered = BytesIO()
-    tifffile.imwrite(buffered, data.astype('float32'))
-    return st.download_button(
-        label=f"💾 Download {filename}",
-        data=buffered.getvalue(),
-        file_name=filename,
-        mime="image/tiff",
-        use_container_width=True
-    )
+def create_geotiff_download(data, filename, lat, lon, radius_km):
+    """Creates a true GeoTIFF with spatial metadata (CRS and Transform)"""
+    # Calculate the exact bounding box used in the Sentinel Hub Request
+    offset = (radius_km / 111.32) / 2
+    west, south = lon - offset, lat - offset
+    east, north = lon + offset, lat + offset
+    
+    height, width = data.shape[:2]
+    count = data.shape[2] if len(data.shape) == 3 else 1
+    
+    # Create the geospatial transform matrix
+    transform = from_bounds(west, south, east, north, width, height)
+    
+    with MemoryFile() as memfile:
+        with memfile.open(
+            driver='GTiff',
+            height=height,
+            width=width,
+            count=count,
+            dtype='float32',
+            crs='EPSG:4326', # WGS84 Coordinate System
+            transform=transform
+        ) as dataset:
+            # Rasterio expects bands first (C, H, W), while our data is (H, W, C)
+            if count == 1:
+                dataset.write(data.astype('float32'), 1)
+            else:
+                for i in range(count):
+                    dataset.write(data[:, :, i].astype('float32'), i + 1)
+        
+        return st.download_button(
+            label=f"💾 Download {filename}",
+            data=memfile.read(),
+            file_name=filename,
+            mime="image/tiff",
+            use_container_width=True
+        )
 
 BAND_NAMES = {"B02 (Blue)": 0, "B03 (Green)": 1, "B04 (Red)": 2, "B08 (NIR)": 3, "B11 (SWIR1)": 4, "B12 (SWIR2)": 5}
 PRESETS = {"Natural Color": [2, 1, 0], "False Color NIR": [3, 2, 1], "Agriculture": [4, 3, 0], "Custom": "CUSTOM"}
@@ -94,6 +123,7 @@ if CLIENT_ID and CLIENT_SECRET:
             except: st.warning("Geocoding failed. Using manual fallback.")
         
         if lat:
+            st.session_state.last_search_coords = (lat, lon, radius_km)
             offset = (radius_km / 111.32) / 2
             st.session_state.current_bounds = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
             start_pos = {"center": [lat, lon], "zoom": 13}
@@ -111,15 +141,16 @@ if CLIENT_ID and CLIENT_SECRET:
     tab_map, tab_analysis = st.tabs(["🗺️ Comparison Dashboard", "🧪 Analysis Lab"])
 
     with tab_map:
-        if st.session_state.search_results:
+        if st.session_state.search_results and st.session_state.last_search_coords:
             results = st.session_state.search_results
+            lat, lon, r_km = st.session_state.last_search_coords
+            
             date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
             selected_dates = st.multiselect("Pick 4 dates for comparison:", date_options, default=date_options[:min(len(date_options), 4)])
 
             if st.button("🖼️ RENDER QUADRANTS", use_container_width=True):
                 if len(selected_dates) == 4:
-                    lat, lon = st.session_state.group_a_pos["center"]
-                    offset = (radius_km / 111.32) / 2
+                    offset = (r_km / 111.32) / 2
                     bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
                     evalscript = """//VERSION=3
                     function setup() { return { input: ['B02','B03','B04','B08','B11','B12'], output: { bands: 6, sampleType: 'FLOAT32' } }; }
@@ -152,7 +183,8 @@ if CLIENT_ID and CLIENT_SECRET:
                                          BAND_NAMES[st.selectbox("B", list(BAND_NAMES.keys()), index=0, key=f"b{i}")]]
                             else: v_rgb = PRESETS[v_preset]
                             
-                            create_tiff_download(data, f"Sentinel2_{actual_date[:10]}_AllBands.tif")
+                            # Using the newly updated GeoTIFF download function
+                            create_geotiff_download(data, f"S2_{actual_date[:10]}_AllBands.tif", lat, lon, r_km)
 
                         pos = st.session_state.group_a_pos if v_sync == "Group A" else st.session_state.group_b_pos if v_sync == "Group B" else st.session_state.group_a_pos
                         m = folium.Map(location=pos["center"], zoom_start=pos["zoom"], tiles=selected_basemap)
@@ -164,6 +196,7 @@ if CLIENT_ID and CLIENT_SECRET:
         if not st.session_state.image_cache:
             st.warning("⚠️ Please download data in the Dashboard tab first.")
         else:
+            lat, lon, r_km = st.session_state.last_search_coords
             ana_date_str = st.selectbox("📅 Select Capture Date", list(st.session_state.image_cache.keys()), key="lab_date")
             dt_obj = datetime.datetime.fromisoformat(ana_date_str.replace('Z', '+00:00'))
             
@@ -189,7 +222,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 elif target_idx == "NDWI": val = (B3 - B8) / (B3 + B8 + 1e-8)
                 else: val = (B11 - B8) / (B11 + B8 + 1e-8)
 
-                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "terrain", "coolwarm", "Spectral", "Greys", "Purples", "Blues", "Greens", "Oranges", "Reds", "YlOrBr", "YlOrRd", "OrRd", "PuRd", "RdPu", "BuPu", "GnBu", "PuBu", "YlGnBu", "PuBuGn", "BuGn", "YlG"], index=0)
+                cmap_sel = st.selectbox("Colormap", ["RdYlGn", "magma", "viridis", "coolwarm", "Spectral"], index=0)
                 
                 st.markdown("---")
                 st.subheader("🔦 Masking")
@@ -198,14 +231,14 @@ if CLIENT_ID and CLIENT_SECRET:
                 masked_val[(val < min_mask) | (val > max_mask)] = np.nan
 
                 st.markdown("---")
-                st.subheader("💾 Export")
-                create_tiff_download(val, f"{target_idx}_{ana_date_str[:10]}.tif")
+                st.subheader("💾 Export GeoTIFF")
+                # Using the newly updated GeoTIFF download function for the calculated index
+                create_geotiff_download(val, f"{target_idx}_{ana_date_str[:10]}.tif", lat, lon, r_km)
                 
                 show_overlay = st.checkbox("Overlay Base", value=False)
                 overlay_alpha = st.slider("Transparency", 0.0, 1.0, 0.5) if show_overlay else 1.0
 
             with col_main:
-                # Optimized Sizing: Large main plot
                 fig, ax = plt.subplots(figsize=(10, 5))
                 if show_overlay:
                     ax.imshow(np.clip(data[:, :, [2, 1, 0]] * brightness, 0, 1))
@@ -219,7 +252,6 @@ if CLIENT_ID and CLIENT_SECRET:
                 st.markdown("### 📊 Distribution")
                 clean_data = val[~np.isnan(val)]
                 
-                # Optimized Sizing: Compact wide histogram
                 fig_h, ax_h = plt.subplots(figsize=(10, 2))
                 ax_h.hist(clean_data, bins=100, color='skyblue', edgecolor='black', alpha=0.7)
                 ax_h.set_title(f"{target_idx} Frequency", fontsize=10)
