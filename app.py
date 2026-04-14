@@ -4,12 +4,13 @@ from sentinelhub import (SHConfig, SentinelHubRequest, DataCollection, MimeType,
 import matplotlib.pyplot as plt
 import numpy as np
 from geopy.geocoders import Nominatim
+import datetime  # Added standard datetime for Streamlit compatibility
 
 # --- PAGE CONFIG ---
 st.set_page_config(layout="wide", page_title="Sentinel Explorer")
 
 # --- AUTHENTICATION ---
-# In production, use st.secrets for security
+st.sidebar.header("Authentication")
 CLIENT_ID = st.sidebar.text_input("SentinelHub Client ID", type="password")
 CLIENT_SECRET = st.sidebar.text_input("SentinelHub Client Secret", type="password")
 
@@ -17,7 +18,13 @@ CLIENT_SECRET = st.sidebar.text_input("SentinelHub Client Secret", type="passwor
 st.sidebar.header("Search Parameters")
 city_name = st.sidebar.text_input("City Name", "Madrid, Spain")
 radius_km = st.sidebar.slider("Radius (km)", 1, 50, 10)
-date_range = st.sidebar.date_input("Date Range", [np.datetime64('2025-06-01'), np.datetime64('2025-08-30')])
+
+# FIXED: Using datetime.date instead of np.datetime64 to fix the API error
+date_range = st.sidebar.date_input(
+    "Date Range", 
+    [datetime.date(2025, 6, 1), datetime.date(2025, 8, 30)]
+)
+
 cloud_limit = st.sidebar.slider("Max Cloud Cover (%)", 0, 100, 10)
 
 st.sidebar.header("Band Combination")
@@ -34,6 +41,11 @@ brightness = st.sidebar.slider("Brightness Gain", 0.5, 5.0, 2.5)
 
 # --- LOGIC ---
 if CLIENT_ID and CLIENT_SECRET:
+    # Validation: Ensure the user has selected both a start and end date
+    if not isinstance(date_range, (list, tuple)) or len(date_range) < 2:
+        st.info("Please select both a start and end date in the calendar.")
+        st.stop()
+
     config = SHConfig()
     config.sh_client_id = CLIENT_ID
     config.sh_client_secret = CLIENT_SECRET
@@ -63,10 +75,13 @@ if CLIENT_ID and CLIENT_SECRET:
             
             # Selection Interface
             options = [f"{i}: {res['properties']['datetime']} (Cloud: {res['properties']['eo:cloud_cover']}%)" for i, res in enumerate(results)]
-            selected_indices = st.multiselect("Select up to 4 images to compare:", options, default=options[:min(len(options), 4)])
+            selected_indices = st.multiselect(
+                "Select up to 4 images to compare:", 
+                options, 
+                default=options[:min(len(options), 4)]
+            )
 
             if st.button("Generate Visualization"):
-                # Evalscript (same as yours)
                 evalscript = """
                 //VERSION=3
                 function setup() {
@@ -76,34 +91,44 @@ if CLIENT_ID and CLIENT_SECRET:
                     };
                 }
                 function evaluatePixel(sample) {
-                    return [sample.B01, sample.B02, sample.B03, sample.B04, sample.B05, sample.B06, sample.B07, sample.B08, sample.B8A, sample.B09, sample.B11, sample.B12, sample.SCL];
+                    return [
+                        sample.B01, sample.B02, sample.B03, sample.B04, sample.B05, 
+                        sample.B06, sample.B07, sample.B08, sample.B8A, sample.B09, 
+                        sample.B11, sample.B12, sample.SCL
+                    ];
                 }
                 """
 
-                cols = st.columns(len(selected_indices))
+                # Filter down to the first 4 selected to prevent layout issues
+                display_selections = selected_indices[:4]
+                cols = st.columns(len(display_selections))
                 
-                for idx, selection in enumerate(selected_indices):
+                for idx, selection in enumerate(display_selections):
                     res_idx = int(selection.split(":")[0])
                     img_date = results[res_idx]['properties']['datetime']
                     
-                    request = SentinelHubRequest(
-                        evalscript=evalscript,
-                        input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(img_date, img_date))],
-                        responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
-                        bbox=roi_bbox, size=(800, 800), config=config
-                    )
-                    
-                    data = request.get_data()[0]
-                    
-                    # Band selection and processing
-                    r, g, b = BANDS_MAP[r_band], BANDS_MAP[g_band], BANDS_MAP[b_band]
-                    display_img = np.clip(data[:, :, [r, g, b]] * brightness, 0, 1)
-                    
-                    with cols[idx]:
-                        st.image(display_img, caption=f"Date: {img_date[:10]}", use_container_width=True)
+                    with st.spinner(f"Downloading image from {img_date[:10]}..."):
+                        request = SentinelHubRequest(
+                            evalscript=evalscript,
+                            input_data=[SentinelHubRequest.input_data(
+                                data_collection=DataCollection.SENTINEL2_L2A, 
+                                time_interval=(img_date, img_date)
+                            )],
+                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
+                            bbox=roi_bbox, size=(800, 800), config=config
+                        )
+                        
+                        full_data = request.get_data()[0]
+                        
+                        # Band mapping
+                        r_idx, g_idx, b_idx = BANDS_MAP[r_band], BANDS_MAP[g_band], BANDS_MAP[b_band]
+                        display_img = np.clip(full_data[:, :, [r_idx, g_idx, b_idx]] * brightness, 0, 1)
+                        
+                        with cols[idx]:
+                            st.image(display_img, caption=f"Date: {img_date[:10]}", use_container_width=True)
         else:
-            st.warning("No images found for these parameters.")
+            st.warning("No images found for these parameters. Try a different date range or higher cloud tolerance.")
     else:
-        st.error("City not found.")
+        st.error("City not found. Please try a more specific name (e.g., 'Madrid, Spain').")
 else:
     st.info("Please enter your Sentinel Hub credentials in the sidebar to start.")
