@@ -11,39 +11,52 @@ from io import BytesIO
 from PIL import Image
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="Sentinel 4-Way Explorer")
+st.set_page_config(layout="wide", page_title="Sentinel Explorer Pro")
 
-# --- AUTHENTICATION ---
+# --- INITIALIZE SESSION STATE ---
+# This is the "brain" that keeps data from disappearing
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
+if 'image_cache' not in st.session_state:
+    st.session_state.image_cache = {}
+if 'bbox' not in st.session_state:
+    st.session_state.bbox = None
+
+# --- SIDEBAR ---
 st.sidebar.header("1. Settings")
-CLIENT_ID = st.sidebar.text_input("SentinelHub Client ID", type="password")
-CLIENT_SECRET = st.sidebar.text_input("SentinelHub Client Secret", type="password")
+CLIENT_ID = st.sidebar.text_input("Client ID", type="password")
+CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
 
 st.sidebar.markdown("---")
-st.sidebar.header("2. Location & Time")
+st.sidebar.header("2. Search Parameters")
 city_name = st.sidebar.text_input("City Name", "Madrid, Spain")
-radius_km = st.sidebar.slider("Zoom/Radius (km)", 1, 20, 5)
+radius_km = st.sidebar.slider("Radius (km)", 1, 20, 5)
 date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2025, 6, 1), datetime.date(2025, 8, 30)))
 cloud_limit = st.sidebar.slider("Max Cloud Cover (%)", 0, 100, 10)
 
-st.sidebar.header("3. Rendering")
+st.sidebar.markdown("---")
+st.sidebar.header("3. Visualization")
 BANDS_MAP = {"Coastal": 0, "Blue": 1, "Green": 2, "Red": 3, "NIR": 7, "SWIR1": 10, "SWIR2": 11}
-col_r, col_g, col_b = st.sidebar.columns(3)
-r_band = col_r.selectbox("R", list(BANDS_MAP.keys()), index=3)
-g_band = col_g.selectbox("G", list(BANDS_MAP.keys()), index=2)
-b_band = col_b.selectbox("B", list(BANDS_MAP.keys()), index=1)
+c1, c2, c3 = st.sidebar.columns(3)
+r_band = c1.selectbox("R", list(BANDS_MAP.keys()), index=3)
+g_band = c2.selectbox("G", list(BANDS_MAP.keys()), index=2)
+b_band = c3.selectbox("B", list(BANDS_MAP.keys()), index=1)
 brightness = st.sidebar.slider("Brightness", 0.5, 5.0, 2.5)
 
-run_search = st.sidebar.button(" Search Images", use_container_width=True)
+# Clear button to reset everything
+if st.sidebar.button(" Reset Cache"):
+    st.session_state.search_results = None
+    st.session_state.image_cache = {}
+    st.rerun()
 
-# --- HELPER: CONVERT NP TO BASE64 PNG ---
+# --- HELPER FUNCTIONS ---
 def get_image_url(np_img):
     img = Image.fromarray((np_img * 255).astype(np.uint8))
     buffered = BytesIO()
     img.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return f"data:image/png;base64,{img_str}"
+    return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
 
-# --- LOGIC ---
+# --- MAIN LOGIC ---
 if CLIENT_ID and CLIENT_SECRET:
     config = SHConfig()
     config.sh_client_id, config.sh_client_secret = CLIENT_ID, CLIENT_SECRET
@@ -53,73 +66,83 @@ if CLIENT_ID and CLIENT_SECRET:
     
     if location:
         lat, lon = location.latitude, location.longitude
-        degree_offset = (radius_km / 111.32) / 2 
-        # Calculate bounds for Folium
-        map_bounds = [[lat - degree_offset, lon - degree_offset], [lat + degree_offset, lon + degree_offset]]
-        roi_bbox = BBox(bbox=[lon - degree_offset, lat - degree_offset, 
-                              lon + degree_offset, lat + degree_offset], crs=CRS.WGS84)
+        offset = (radius_km / 111.32) / 2 
+        bounds = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
+        st.session_state.bbox = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
 
-        if run_search or 'results' in st.session_state:
-            if run_search:
+        # BUTTON 1: SEARCH
+        if st.sidebar.button(" Search & Update Area", type="primary"):
+            with st.spinner("Searching..."):
                 catalog = SentinelHubCatalog(config=config)
-                search_iterator = catalog.search(DataCollection.SENTINEL2_L2A, bbox=roi_bbox,
-                    time=(str(date_range[0]), str(date_range[1])), filter=f"eo:cloud_cover < {cloud_limit}")
-                st.session_state.results = list(search_iterator)
+                search = catalog.search(DataCollection.SENTINEL2_L2A, bbox=st.session_state.bbox,
+                                        time=(str(date_range[0]), str(date_range[1])), 
+                                        filter=f"eo:cloud_cover < {cloud_limit}")
+                st.session_state.search_results = list(search)
+                st.session_state.image_cache = {} # Clear images when new search happens
 
-            if st.session_state.get('results'):
-                res_list = st.session_state.results
-                options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(res_list)]
-                selected = st.multiselect("Select exactly 4 dates:", options, default=options[:min(len(options), 4)])
+        # IF RESULTS EXIST
+        if st.session_state.search_results:
+            results = st.session_state.search_results
+            options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(results)]
+            
+            # Use session state to keep selection
+            selected = st.multiselect("Select exactly 4 dates:", options, 
+                                      default=options[:min(len(options), 4)])
 
+            # BUTTON 2: DOWNLOAD & RENDER
+            if st.button(" Render / Refresh Maps"):
+                evalscript = """
+                //VERSION=3
+                function setup() { 
+                    return { input: ["B01","B02","B03","B04","B05","B06","B07","B08","B8A","B09","B11","B12"], 
+                             output: { bands: 12, sampleType: "FLOAT32" } }; 
+                }
+                function evaluatePixel(sample) {
+                    return [sample.B01, sample.B02, sample.B03, sample.B04, sample.B05, sample.B06, 
+                            sample.B07, sample.B08, sample.B8A, sample.B09, sample.B11, sample.B12];
+                }
+                """
+                
                 if len(selected) == 4:
-                    if st.button(" Render Quadrant View", type="primary"):
-                        evalscript = """
-                        //VERSION=3
-                        function setup() {
-                            return { input: ["B01","B02","B03","B04","B05","B06","B07","B08","B8A","B09","B11","B12"], 
-                                     output: { bands: 12, sampleType: "FLOAT32" } };
-                        }
-                        function evaluatePixel(sample) {
-                            return [sample.B01, sample.B02, sample.B03, sample.B04, sample.B05, sample.B06, 
-                                    sample.B07, sample.B08, sample.B8A, sample.B09, sample.B11, sample.B12];
-                        }
-                        """
-
-                        col1, col2 = st.columns(2)
+                    for selection in selected:
+                        res_idx = int(selection.split(":")[0])
+                        img_date = results[res_idx]['properties']['datetime']
                         
-                        for idx, selection in enumerate(selected):
-                            res_idx = int(selection.split(":")[0])
-                            img_date = res_list[res_idx]['properties']['datetime']
-                            
-                            request = SentinelHubRequest(
-                                evalscript=evalscript,
-                                input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(img_date, img_date))],
-                                responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
-                                bbox=roi_bbox, size=(800, 800), config=config
-                            )
-                            
-                            data = request.get_data()[0]
-                            r_i, g_i, b_i = BANDS_MAP[r_band], BANDS_MAP[g_band], BANDS_MAP[b_band]
-                            img_rgb = np.clip(data[:, :, [r_i, g_i, b_i]] * brightness, 0, 1)
-                            img_url = get_image_url(img_rgb)
+                        # Only download if we don't already have it
+                        if img_date not in st.session_state.image_cache:
+                            with st.spinner(f"Downloading {img_date[:10]}..."):
+                                request = SentinelHubRequest(
+                                    evalscript=evalscript,
+                                    input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(img_date, img_date))],
+                                    responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
+                                    bbox=st.session_state.bbox, size=(800, 800), config=config
+                                )
+                                st.session_state.image_cache[img_date] = request.get_data()[0]
 
-                            # Create individual map
-                            m = folium.Map(location=[lat, lon], zoom_start=13, tiles="OpenStreetMap")
-                            folium.raster_layers.ImageOverlay(
-                                image=img_url,
-                                bounds=map_bounds,
-                                opacity=0.7,
-                                name=f"Sentinel {img_date[:10]}"
-                            ).add_to(m)
-                            
-                            # Place in grid
-                            target_col = col1 if idx % 2 == 0 else col2
-                            with target_col:
-                                st.markdown(f"### {img_date[:10]}")
-                                st_folium(m, height=400, width=None, key=f"map_{idx}")
+            # DISPLAY GRID (This part now pulls from the "cache" in session_state)
+            if len(st.session_state.image_cache) >= 4:
+                col1, col2 = st.columns(2)
+                for idx, selection in enumerate(selected):
+                    res_idx = int(selection.split(":")[0])
+                    date_key = results[res_idx]['properties']['datetime']
+                    
+                    if date_key in st.session_state.image_cache:
+                        raw_data = st.session_state.image_cache[date_key]
+                        r_i, g_i, b_i = BANDS_MAP[r_band], BANDS_MAP[g_band], BANDS_MAP[b_band]
+                        img_rgb = np.clip(raw_data[:, :, [r_i, g_i, b_i]] * brightness, 0, 1)
+                        img_url = get_image_url(img_rgb)
+
+                        m = folium.Map(location=[lat, lon], zoom_start=13, tiles="OpenStreetMap")
+                        folium.raster_layers.ImageOverlay(image=img_url, bounds=bounds, opacity=0.7).add_to(m)
+                        
+                        target_col = col1 if idx % 2 == 0 else col2
+                        with target_col:
+                            st.markdown(f"**Date: {date_key[:10]}**")
+                            st_folium(m, height=400, width=500, key=f"map_{date_key}")
                 else:
-                    st.info("Please select exactly 4 images.")
+                    if len(selected) != 4:
+                        st.warning("Please select exactly 4 dates.")
     else:
         st.error("Location not found.")
 else:
-    st.info(" Enter credentials in the sidebar to start.")
+    st.info(" Welcome! Enter credentials and click 'Search' to start.")
