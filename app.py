@@ -5,14 +5,13 @@ import numpy as np
 from geopy.geocoders import Nominatim
 import datetime
 import folium
-from folium.plugins import SyncMap
 from streamlit_folium import st_folium
 import base64
 from io import BytesIO
 from PIL import Image
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="Sentinel 4-Way Sync Map")
+st.set_page_config(layout="wide", page_title="Sentinel 4-Way Explorer")
 
 # --- AUTHENTICATION ---
 st.sidebar.header("1. Settings")
@@ -26,15 +25,15 @@ radius_km = st.sidebar.slider("Zoom/Radius (km)", 1, 20, 5)
 date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2025, 6, 1), datetime.date(2025, 8, 30)))
 cloud_limit = st.sidebar.slider("Max Cloud Cover (%)", 0, 100, 10)
 
-st.sidebar.header("3. Band Combination")
-BANDS_MAP = {"Coastal": 0, "Blue": 1, "Green": 2, "Red": 3, "NIR": 7, "SWIR1": 10, "SWIR2": 11, "SCL": 12}
+st.sidebar.header("3. Rendering")
+BANDS_MAP = {"Coastal": 0, "Blue": 1, "Green": 2, "Red": 3, "NIR": 7, "SWIR1": 10, "SWIR2": 11}
 col_r, col_g, col_b = st.sidebar.columns(3)
 r_band = col_r.selectbox("R", list(BANDS_MAP.keys()), index=3)
 g_band = col_g.selectbox("G", list(BANDS_MAP.keys()), index=2)
 b_band = col_b.selectbox("B", list(BANDS_MAP.keys()), index=1)
 brightness = st.sidebar.slider("Brightness", 0.5, 5.0, 2.5)
 
-run_search = st.sidebar.button("🔍 Search Images", use_container_width=True)
+run_search = st.sidebar.button(" Search Images", use_container_width=True)
 
 # --- HELPER: CONVERT NP TO BASE64 PNG ---
 def get_image_url(np_img):
@@ -55,6 +54,8 @@ if CLIENT_ID and CLIENT_SECRET:
     if location:
         lat, lon = location.latitude, location.longitude
         degree_offset = (radius_km / 111.32) / 2 
+        # Calculate bounds for Folium
+        map_bounds = [[lat - degree_offset, lon - degree_offset], [lat + degree_offset, lon + degree_offset]]
         roi_bbox = BBox(bbox=[lon - degree_offset, lat - degree_offset, 
                               lon + degree_offset, lat + degree_offset], crs=CRS.WGS84)
 
@@ -68,27 +69,24 @@ if CLIENT_ID and CLIENT_SECRET:
             if st.session_state.get('results'):
                 res_list = st.session_state.results
                 options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(res_list)]
-                selected = st.multiselect("Select exactly 4 dates to sync:", options, default=options[:min(len(options), 4)])
+                selected = st.multiselect("Select exactly 4 dates:", options, default=options[:min(len(options), 4)])
 
                 if len(selected) == 4:
-                    if st.button("🗺️ Launch 4-Way Sync Map", type="primary"):
-                        # Create 4 folium maps
-                        maps = []
-                        for i in range(4):
-                            maps.append(folium.Map(location=[lat, lon], zoom_start=13, tiles="OpenStreetMap", control_scale=True))
-
+                    if st.button(" Render Quadrant View", type="primary"):
                         evalscript = """
                         //VERSION=3
                         function setup() {
-                            return { input: ["B01","B02","B03","B04","B05","B06","B07","B08","B8A","B09","B11","B12","SCL"], 
-                                     output: { bands: 13, sampleType: "FLOAT32" } };
+                            return { input: ["B01","B02","B03","B04","B05","B06","B07","B08","B8A","B09","B11","B12"], 
+                                     output: { bands: 12, sampleType: "FLOAT32" } };
                         }
                         function evaluatePixel(sample) {
                             return [sample.B01, sample.B02, sample.B03, sample.B04, sample.B05, sample.B06, 
-                                    sample.B07, sample.B08, sample.B8A, sample.B09, sample.B11, sample.B12, sample.SCL];
+                                    sample.B07, sample.B08, sample.B8A, sample.B09, sample.B11, sample.B12];
                         }
                         """
 
+                        col1, col2 = st.columns(2)
+                        
                         for idx, selection in enumerate(selected):
                             res_idx = int(selection.split(":")[0])
                             img_date = res_list[res_idx]['properties']['datetime']
@@ -103,37 +101,25 @@ if CLIENT_ID and CLIENT_SECRET:
                             data = request.get_data()[0]
                             r_i, g_i, b_i = BANDS_MAP[r_band], BANDS_MAP[g_band], BANDS_MAP[b_band]
                             img_rgb = np.clip(data[:, :, [r_i, g_i, b_i]] * brightness, 0, 1)
-                            
-                            # Overlay image on the specific map
                             img_url = get_image_url(img_rgb)
+
+                            # Create individual map
+                            m = folium.Map(location=[lat, lon], zoom_start=13, tiles="OpenStreetMap")
                             folium.raster_layers.ImageOverlay(
                                 image=img_url,
-                                bounds=[[lat - degree_offset, lon - degree_offset], [lat + degree_offset, lon + degree_offset]],
-                                opacity=0.8,
+                                bounds=map_bounds,
+                                opacity=0.7,
                                 name=f"Sentinel {img_date[:10]}"
-                            ).add_to(maps[idx])
+                            ).add_to(m)
                             
-                            folium.Marker([lat, lon], tooltip=f"Center {img_date[:10]}").add_to(maps[idx])
-
-                        # Sync the maps
-                        for i in range(1, 4):
-                            maps[0].add_child(SyncMap(maps[i]))
-
-                        # Layout: 2x2 Grid
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.subheader(selected[0])
-                            st_folium(maps[0], height=400, width=600, key="m1")
-                            st.subheader(selected[2])
-                            st_folium(maps[2], height=400, width=600, key="m3")
-                        with col2:
-                            st.subheader(selected[1])
-                            st_folium(maps[1], height=400, width=600, key="m2")
-                            st.subheader(selected[3])
-                            st_folium(maps[3], height=400, width=600, key="m4")
+                            # Place in grid
+                            target_col = col1 if idx % 2 == 0 else col2
+                            with target_col:
+                                st.markdown(f"### {img_date[:10]}")
+                                st_folium(m, height=400, width=None, key=f"map_{idx}")
                 else:
-                    st.info("Please select exactly 4 images for the quadrant view.")
+                    st.info("Please select exactly 4 images.")
     else:
         st.error("Location not found.")
 else:
-    st.info("👋 Welcome! Enter credentials to begin.")
+    st.info(" Enter credentials in the sidebar to start.")
