@@ -18,13 +18,12 @@ from rasterio.io import MemoryFile
 import time
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="S1 Radar Explorer", page_icon="📡")
+st.set_page_config(layout="wide", page_title="S1 Radar Explorer Pro", page_icon="📡")
 
 # --- INITIALIZE SESSION STATE ---
 if 'search_results_s1' not in st.session_state: st.session_state.search_results_s1 = None
 if 'image_cache_s1' not in st.session_state: st.session_state.image_cache_s1 = {}
 if 'group_a_pos_s1' not in st.session_state: st.session_state.group_a_pos_s1 = {"center": [40.4168, -3.7038], "zoom": 13}
-if 'group_b_pos_s1' not in st.session_state: st.session_state.group_b_pos_s1 = {"center": [40.4168, -3.7038], "zoom": 13}
 if 'current_bounds_s1' not in st.session_state: st.session_state.current_bounds_s1 = None
 if 'app_uuid_s1' not in st.session_state: st.session_state.app_uuid_s1 = str(uuid.uuid4())
 if 'last_search_coords_s1' not in st.session_state: st.session_state.last_search_coords_s1 = None
@@ -36,7 +35,8 @@ def get_image_url(np_img):
     img.save(buffered, format="PNG")
     return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
 
-def create_geotiff_download(data, filename, lat, lon, radius_km):
+def create_geotiff_download(data, filename, lat, lon, radius_km, key):
+    """Generates a georeferenced TIFF and avoids Streamlit DuplicateID errors using a key."""
     offset = (radius_km / 111.32) / 2
     west, south = lon - offset, lat - offset
     east, north = lon + offset, lat + offset
@@ -57,8 +57,12 @@ def create_geotiff_download(data, filename, lat, lon, radius_km):
                     dataset.write(data[:, :, i].astype('float32'), i + 1)
         
         return st.download_button(
-            label=f"💾 Export {filename}", data=memfile.read(),
-            file_name=filename, mime="image/tiff", use_container_width=True
+            label=f"💾 Export {filename}", 
+            data=memfile.read(),
+            file_name=filename, 
+            mime="image/tiff", 
+            use_container_width=True,
+            key=key # Prevents DuplicateElementId error
         )
 
 # --- SIDEBAR ---
@@ -95,18 +99,17 @@ if CLIENT_ID and CLIENT_SECRET:
         
         if not use_manual:
             try:
-                # Unique agent to minimize 429 errors
-                geolocator = Nominatim(user_agent=f"sentinel_explorer_radar_{st.session_state.app_uuid_s1}")
-                time.sleep(1.1) # Respect Nominatim 1-call-per-second rule
+                # Unique agent and delay to prevent 429 Rate Limit errors
+                geolocator = Nominatim(user_agent=f"sentinel_explorer_{st.session_state.app_uuid_s1}")
+                time.sleep(1.2) 
                 location = geolocator.geocode(city_name, timeout=10)
                 if location: 
                     lat, lon = location.latitude, location.longitude
                 else:
                     st.error("City not found. Using manual fallback.")
-            except Exception as e:
+            except Exception:
                 st.warning("Geocoding Rate Limited (429). Using manual coordinates.")
         
-        # Apply manual fallback if geocoding failed or was forced
         if use_manual or (lat is None):
             lat, lon = man_lat, man_lon
 
@@ -114,12 +117,12 @@ if CLIENT_ID and CLIENT_SECRET:
             st.session_state.last_search_coords_s1 = (lat, lon, radius_km)
             offset = (radius_km / 111.32) / 2
             st.session_state.current_bounds_s1 = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
-            st.session_state.group_a_pos_s1 = {"center": [lat, lon], "zoom": 13}
-            st.session_state.group_b_pos_s1 = {"center": [lat, lon], "zoom": 13}
+            st.session_state.group_a_pos_s1 = {"center": [lat, lon], "zoom": 12}
             
             catalog = SentinelHubCatalog(config=config)
             bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
             
+            # S1 Search (No cloud filter)
             search = catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox_obj,
                                     time=(str(date_range[0]), str(date_range[1])))
             st.session_state.search_results_s1 = list(search)
@@ -134,7 +137,7 @@ if CLIENT_ID and CLIENT_SECRET:
             lat, lon, r_km = st.session_state.last_search_coords_s1
             
             date_options = [f"{i}: {r['properties']['datetime'][:10]} ({r['properties'].get('sat:orbit_state', '?')})" for i, r in enumerate(results)]
-            selected_dates = st.multiselect("Pick 4 dates to compare:", date_options, default=date_options[:min(len(date_options), 4)])
+            selected_dates = st.multiselect("Select 4 dates:", date_options, default=date_options[:min(len(date_options), 4)])
 
             if st.button("🖼️ RENDER RADAR QUADRANTS", use_container_width=True):
                 if len(selected_dates) == 4:
@@ -155,16 +158,15 @@ if CLIENT_ID and CLIENT_SECRET:
                             st.session_state.image_cache_s1[actual_date] = request.get_data()[0]
 
             if len(st.session_state.image_cache_s1) >= 4:
-                c_left, c_right = st.columns(2)
+                cols = st.columns(2)
                 for i, date_str in enumerate(selected_dates):
-                    target_col = c_left if i % 2 == 0 else c_right
-                    actual_date = results[int(date_str.split(":")[0])]['properties']['datetime']
-                    
-                    with target_col:
+                    with cols[i % 2]:
+                        actual_date = results[int(date_str.split(":")[0])]['properties']['datetime']
                         data = st.session_state.image_cache_s1[actual_date]
+                        
                         with st.expander(f"⚙️ View {i+1} Setup ({actual_date[:10]})"):
-                            v_preset = st.selectbox("Composite", ["False Color (VV/VH/Ratio)", "Grayscale (VV)", "Grayscale (VH)"], key=f"p{i}")
-                            create_geotiff_download(data, f"S1_{actual_date[:10]}_Linear.tif", lat, lon, r_km)
+                            v_preset = st.selectbox("Composite", ["False Color (VV/VH/Ratio)", "Grayscale (VV)", "Grayscale (VH)"], key=f"v_pre_{i}")
+                            create_geotiff_download(data, f"S1_{actual_date[:10]}.tif", lat, lon, r_km, key=f"dl_dash_{i}_{actual_date}")
 
                         VV, VH = data[:,:,0], data[:,:,1]
                         if "False Color" in v_preset:
@@ -175,41 +177,44 @@ if CLIENT_ID and CLIENT_SECRET:
                             v_chan = np.clip(chan * (brightness if "VV" in v_preset else brightness*2), 0, 1)
                             img_rgb = np.dstack([v_chan, v_chan, v_chan])
 
-                        m = folium.Map(location=st.session_state.group_a_pos_s1["center"], zoom_start=13, tiles=selected_basemap)
+                        m = folium.Map(location=[lat, lon], zoom_start=12, tiles=selected_basemap)
                         folium.raster_layers.ImageOverlay(image=get_image_url(img_rgb), bounds=st.session_state.current_bounds_s1, opacity=opacity).add_to(m)
-                        st_folium(m, height=350, width=550, key=f"s1_map_{i}")
+                        st_folium(m, height=300, width=500, key=f"s1_map_{i}_{actual_date}")
 
     with tab_analysis:
         if not st.session_state.image_cache_s1:
             st.warning("Please render images in the Dashboard first.")
         else:
             lat, lon, r_km = st.session_state.last_search_coords_s1
-            ana_date = st.selectbox("📅 Select Date", list(st.session_state.image_cache_s1.keys()))
+            ana_date = st.selectbox("📅 Select Date", list(st.session_state.image_cache_s1.keys()), key="ana_date_sel")
             data = st.session_state.image_cache_s1[ana_date]
+            
+            # Convert to Decibels
             VV_db = 10 * np.log10(data[:,:,0] + 1e-10)
             VH_db = 10 * np.log10(data[:,:,1] + 1e-10)
 
             col_side, col_plot = st.columns([1, 3])
             with col_side:
-                target = st.selectbox("Polarization", ["VV (dB)", "VH (dB)"])
+                target = st.selectbox("Polarization", ["VV (dB)", "VH (dB)"], key="ana_pol")
                 val = VV_db if "VV" in target else VH_db
-                cmap = st.selectbox("CMap", ["Blues_r", "Greys_r", "viridis"], index=0)
-                db_min, db_max = st.slider("dB Filter", -35.0, 5.0, (-35.0, 5.0))
+                cmap = st.selectbox("CMap", ["Blues_r", "Greys_r", "viridis", "magma"], index=0, key="ana_cmap")
+                db_min, db_max = st.slider("dB Filter", -35.0, 5.0, (-35.0, 5.0), key="ana_db_slider")
                 
                 masked = np.copy(val)
                 masked[(val < db_min) | (val > db_max)] = np.nan
-                create_geotiff_download(val, f"S1_{target}_{ana_date[:10]}.tif", lat, lon, r_km)
+                create_geotiff_download(val, f"S1_{target}_{ana_date[:10]}.tif", lat, lon, r_km, key=f"dl_ana_{ana_date}")
 
             with col_plot:
                 fig, ax = plt.subplots(figsize=(10, 5))
                 im = ax.imshow(masked, cmap=cmap, vmin=-30, vmax=0)
-                plt.colorbar(im, fraction=0.03, pad=0.04, label="dB")
+                plt.colorbar(im, fraction=0.03, pad=0.04, label="Decibels (dB)")
                 ax.axis('off')
                 st.pyplot(fig)
                 
+                # Distribution Histogram
                 fig_h, ax_h = plt.subplots(figsize=(10, 2))
                 ax_h.hist(val.flatten(), bins=100, color='royalblue', alpha=0.7)
-                ax_h.set_title("Backscatter Distribution (dB)")
+                ax_h.set_title("Pixel Backscatter Distribution (dB)")
                 st.pyplot(fig_h)
 
 else:
