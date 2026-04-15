@@ -6,3 +6,4 @@ geopy
 streamlit-folium
 folium
 rasterio
+tifffile
