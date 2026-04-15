@@ -54,7 +54,7 @@ The Analysis Lab utilizes the following formulas to transform raw satellite data
 
 **User Interface Preview**
 
-![Dashboard](images/FirstPageSample.png)
+![Dashboard](images/FirstPageSample.PNG)
 
 **Dashboard Tab:** A layout optimized for side-by-side time-lapse comparison.
 
