@@ -72,7 +72,7 @@ else:
     man_lon = col_lon.number_input("Lon", value=-0.3763, format="%.4f")
     city_name = None
 
-radius_km = st.sidebar.slider("Radius (km)", 1, 25, 10)
+radius_km = st.sidebar.slider("Radius (km)", 1, 45, 10)
 date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2024, 10, 20), datetime.date(2024, 11, 10)))
 
 st.sidebar.markdown("---")
