@@ -50,14 +50,18 @@ streamlit run app.py
 **Indices**
 The Analysis Lab utilizes the following formulas to transform raw satellite data into actionable insights:
 
-<img width="1380" height="309" alt="image" src="https://github.com/user-attachments/assets/8a431aa6-c6b3-4f09-9646-0008c6fdc098" />
+<img width="1200" height="250" alt="image" src="https://github.com/user-attachments/assets/8a431aa6-c6b3-4f09-9646-0008c6fdc098" />
+
+
 
 **User Interface Preview**
 
 **Dashboard Tab:** A layout optimized for side-by-side time-lapse comparison.
-<img width="1861" height="853" alt="image" src="https://github.com/user-attachments/assets/24cd03f9-e551-413a-8fbb-e65a23622bfc" />
+<img width="1300" height="600" alt="image" src="https://github.com/user-attachments/assets/24cd03f9-e551-413a-8fbb-e65a23622bfc" />
 
 
 **Analysis Tab:** A scientific workspace with colormap selectors and pixel-distribution histograms.
+<img width="1300" height="600" alt="image" src="https://github.com/user-attachments/assets/2a54ffad-f4fd-4b63-a0bc-72655f210a8d" />
+
 
 
