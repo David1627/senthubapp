@@ -1,4 +1,4 @@
-<img width="1861" height="853" alt="image" src="https://github.com/user-attachments/assets/20643f31-3096-42d6-a5f0-ccc511999bb4" />
+
 [Try the App](https://sentappapp-ej6o5f4gymr3z222xg4ehn.streamlit.app/)
 
 ***Sentinel Explorer Pro***
@@ -47,17 +47,15 @@ Note: Required libraries include streamlit, sentinelhub, folium, streamlit-foliu
 
 streamlit run app.py
 
-**Science Behind the Indices**
+**Indices**
 The Analysis Lab utilizes the following formulas to transform raw satellite data into actionable insights:
 
-<img width="1729" height="581" alt="image" src="https://gitub.com/user-attachments/assets/e9ecc9bd-90c4-4cff-8ea2-abc4f7a40ae2" />
+<img width="1380" height="309" alt="image" src="https://github.com/user-attachments/assets/8a431aa6-c6b3-4f09-9646-0008c6fdc098" />
 
 **User Interface Preview**
 
-<img width="1861" height="853" alt="image" src="https://github.com/user-attachments/assets/24cd03f9-e551-413a-8fbb-e65a23622bfc" />
-
 **Dashboard Tab:** A layout optimized for side-by-side time-lapse comparison.
-
+<img width="1861" height="853" alt="image" src="https://github.com/user-attachments/assets/24cd03f9-e551-413a-8fbb-e65a23622bfc" />
 
 
 **Analysis Tab:** A scientific workspace with colormap selectors and pixel-distribution histograms.
