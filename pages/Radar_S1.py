@@ -56,7 +56,7 @@ CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
 st.sidebar.markdown("---")
 st.sidebar.header("2. Search Area")
 city_name = st.sidebar.text_input("City Name", "Valencia, Spain")
-radius_km = st.sidebar.slider("Radius (km)", 1, 25, 10)
+radius_km = st.sidebar.slider("Radius (km)", 1, 45, 10)
 date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2025, 10, 1), datetime.date(2025, 11, 15)))
 
 with st.sidebar.expander("📍 Manual Coords"):
