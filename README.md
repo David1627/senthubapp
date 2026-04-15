@@ -61,7 +61,8 @@ The Analysis Lab utilizes the following formulas to transform raw satellite data
 
 
 **Analysis Tab:** A scientific workspace with colormap selectors and pixel-distribution histograms.
-<img width="1300" height="600" alt="image" src="https://github.com/user-attachments/assets/2a54ffad-f4fd-4b63-a0bc-72655f210a8d" />
+<img width="1562" height="749" alt="image" src="https://github.com/user-attachments/assets/f3e16bd4-7724-43b2-9719-8b2ec8c7fe9f" />
+
 
 
 
