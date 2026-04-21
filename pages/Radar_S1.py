@@ -108,7 +108,7 @@ if CLIENT_ID and CLIENT_SECRET:
             sel_dates = st.multiselect("Select up to 4 dates:", date_options, default=date_options[:min(len(date_options), 4)])
 
             if st.button("🖼️ RENDER QUADRANTS", use_container_width=True):
-                bbox_obj = BBox(bbox=[lon-(r_km/222), lat-(r_km/222), lon+(r_km/222), lat+(r_km/222)], crs=CRS.WGS84)
+                bbox_obj = BBox(bbox=[lon-(r_km/222), lat-(r_km/1), lon+(r_km/1), lat+(r_km/222)], crs=CRS.WGS84)
                 evalscript = """//VERSION=3
                 function setup() { return { input: ['VV', 'VH'], output: { bands: 2, sampleType: 'FLOAT32' } }; }
                 function evaluatePixel(sample) { return [sample.VV, sample.VH]; }"""
