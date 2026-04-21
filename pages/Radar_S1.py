@@ -58,23 +58,26 @@ st.sidebar.header("2. Search Area")
 search_mode = st.sidebar.radio("Location Mode:", ["Search City", "Manual Coordinates"])
 
 if search_mode == "Search City":
-    city_query = st.sidebar.text_input("Enter City Name (e.g. Lisbon, Portugal)", "Valencia, Spain")
+    city_query = st.sidebar.text_input("City Name", "Lisbon, Portugal")
     use_manual = False
 else:
-    st.sidebar.info("Enter coordinates below:")
     use_manual = True
 
 radius_km = st.sidebar.slider("Search Radius (km)", 1, 50, 10)
-date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2024, 10, 1), datetime.date(2024, 11, 15)))
+
+# OPTIONAL DATES: Default to a 3-month window ending today
+today = datetime.date.today()
+default_start = today - datetime.timedelta(days=90)
+date_range = st.sidebar.date_input("Optional: Select Date Window", value=(default_start, today))
 
 with st.sidebar.expander("📍 Manual Coordinate Overrides"):
-    man_lat = st.number_input("Lat", value=39.4699, format="%.6f")
-    man_lon = st.number_input("Lon", value=-0.3763, format="%.6f")
+    man_lat = st.number_input("Lat", value=38.7223, format="%.6f")
+    man_lon = st.number_input("Lon", value=-9.1393, format="%.6f")
 
 btn_search = st.sidebar.button("🔍 SEARCH RADAR", type="primary", use_container_width=True)
 
 st.sidebar.markdown("---")
-st.sidebar.header("3. Display Settings")
+st.sidebar.header("3. Display")
 brightness = st.sidebar.slider("Radar Gain", 0.5, 10.0, 3.0)
 selected_basemap = st.sidebar.selectbox("Base Map", ["OpenStreetMap", "Esri World Imagery", "CartoDB Positron"])
 
@@ -86,53 +89,51 @@ if CLIENT_ID and CLIENT_SECRET:
         lat, lon = None, None
         
         if search_mode == "Search City":
-            with st.spinner(f"Geocoding '{city_query}'..."):
-                try:
-                    # Creating a unique user agent to avoid being blocked
-                    ua = f"sentinel_flood_explorer_{st.session_state.app_uuid_s1}"
-                    geolocator = Nominatim(user_agent=ua)
-                    time.sleep(1.5) # Compliance with Nominatim usage policy
-                    location = geolocator.geocode(city_query, timeout=10)
-                    
-                    if location:
-                        lat, lon = location.latitude, location.longitude
-                        st.sidebar.success(f"📍 Found: {location.address[:40]}...")
-                    else:
-                        st.error(f"Could not find '{city_query}'. Try adding the country name.")
-                except Exception as e:
-                    st.error(f"Geocoding error: {e}. Falling back to manual.")
+            try:
+                # Unique User Agent is key for Nominatim!
+                geolocator = Nominatim(user_agent=f"flood_explorer_{st.session_state.app_uuid_s1}")
+                time.sleep(1) 
+                location = geolocator.geocode(city_query, timeout=10)
+                if location:
+                    lat, lon = location.latitude, location.longitude
+                    st.sidebar.success(f"Found: {city_query}")
+                else:
+                    st.error(f"City '{city_query}' not found. Using manual coords.")
+            except:
+                st.error("Geocoding timed out. Using manual coords.")
 
         if use_manual or (lat is None):
             lat, lon = man_lat, man_lon
-            st.sidebar.info(f"Using Coordinates: {lat}, {lon}")
 
         if lat:
+            # RESET STATE ON NEW SEARCH
             st.session_state.last_search_coords_s1 = (lat, lon, radius_km)
             offset = (radius_km / 111.32) / 2
             st.session_state.current_bounds_s1 = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
+            st.session_state.image_cache_s1 = {} # Clear old images
             
             catalog = SentinelHubCatalog(config=config)
             bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
             
-            with st.spinner("Searching Satellite Catalog..."):
-                search = catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox_obj, time=(str(date_range[0]), str(date_range[1])))
-                st.session_state.search_results_s1 = list(search)
-                st.session_state.image_cache_s1 = {}
-                
+            search = catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox_obj, time=(str(date_range[0]), str(date_range[1])))
+            st.session_state.search_results_s1 = list(search)
+            
             if not st.session_state.search_results_s1:
-                st.warning("No radar images found for this area/date. Try expanding the date range.")
+                st.warning("No images found. Try a wider date range.")
 
-    # --- TABS (Rest of the app logic remains consistent) ---
-    tab_dash, tab_ana, tab_flood = st.tabs(["🗺️ Dashboard", "🧪 Lab", "🚨 Flood Mapping"])
+    # --- TABS ---
+    tab_dash, tab_flood = st.tabs(["🗺️ Dashboard", "🚨 Flood Mapping"])
 
     with tab_dash:
         if st.session_state.search_results_s1:
             res = st.session_state.search_results_s1
             lat, lon, r_km = st.session_state.last_search_coords_s1
+            
+            # Show users what they found
             date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(res)]
-            sel_dates = st.multiselect("Select dates to process:", date_options, default=date_options[:min(len(date_options), 4)])
+            sel_dates = st.multiselect("Select up to 4 dates to render:", date_options, default=date_options[:min(len(date_options), 2)])
 
-            if st.button("🖼️ RENDER RADAR QUADRANTS", use_container_width=True):
+            if st.button("🖼️ RENDER SELECTED DATES", use_container_width=True):
                 offset = (r_km / 111.32) / 2
                 bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
                 evalscript = """//VERSION=3
@@ -149,60 +150,51 @@ if CLIENT_ID and CLIENT_SECRET:
 
             if st.session_state.image_cache_s1:
                 cols = st.columns(2)
-                for i, d_str in enumerate(sel_dates):
+                for i, d_key in enumerate(st.session_state.image_cache_s1.keys()):
                     with cols[i % 2]:
-                        actual_date = res[int(d_str.split(":")[0])]['properties']['datetime']
-                        if actual_date in st.session_state.image_cache_s1:
-                            data = st.session_state.image_cache_s1[actual_date]
-                            with st.expander(f"Visuals: {actual_date[:10]}", expanded=True):
-                                pol_choice = st.radio("Mode", ["VV", "VH", "False Color"], key=f"pol_{i}", horizontal=True)
-                            
-                            VV, VH = data[:,:,0], data[:,:,1]
-                            if pol_choice == "VV":
-                                img = np.dstack([np.clip(VV * brightness, 0, 1)]*3)
-                            elif pol_choice == "VH":
-                                img = np.dstack([np.clip(VH * (brightness*1.5), 0, 1)]*3)
-                            else:
-                                ratio = np.clip(VV / (VH + 1e-5), 0, 1)
-                                img = np.dstack([np.clip(VV * brightness, 0, 1), np.clip(VH * brightness, 0, 1), ratio])
+                        data = st.session_state.image_cache_s1[d_key]
+                        pol_choice = st.radio(f"Polarization ({d_key[:10]})", ["VV", "VH"], key=f"pol_{i}", horizontal=True)
+                        
+                        channel = 0 if pol_choice == "VV" else 1
+                        img = np.dstack([np.clip(data[:,:,channel] * brightness, 0, 1)]*3)
 
-                            m = folium.Map(location=[lat, lon], zoom_start=12, tiles=selected_basemap)
-                            folium.raster_layers.ImageOverlay(image=get_image_url(img), bounds=st.session_state.current_bounds_s1).add_to(m)
-                            st_folium(m, height=400, width=None, key=f"map_{i}_{actual_date}")
+                        m = folium.Map(location=[lat, lon], zoom_start=13, tiles=selected_basemap)
+                        folium.raster_layers.ImageOverlay(image=get_image_url(img), bounds=st.session_state.current_bounds_s1).add_to(m)
+                        st_folium(m, height=400, width=None, key=f"map_{i}")
 
     with tab_flood:
         if len(st.session_state.image_cache_s1) >= 2:
             d_list = list(st.session_state.image_cache_s1.keys())
-            c1, c2, c3 = st.columns(3)
-            with c1: before_date = st.selectbox("Baseline (Dry)", d_list, index=0)
-            with c2: after_date = st.selectbox("Crisis (Wet)", d_list, index=1)
-            with c3: flood_color = st.color_picker("Flood Overlay Color", "#FF0000")
+            c1, c2 = st.columns(2)
+            before_date = c1.selectbox("Select Baseline (Dry)", d_list, index=0)
+            after_date = c2.selectbox("Select Crisis (Wet)", d_list, index=1)
 
+            # CALCULATION
             before_db = 10 * np.log10(st.session_state.image_cache_s1[before_date][:,:,0] + 1e-10)
             after_db = 10 * np.log10(st.session_state.image_cache_s1[after_date][:,:,0] + 1e-10)
             diff = after_db - before_db
             
-            col_ctrl, col_map = st.columns([1, 2])
-            with col_ctrl:
-                thresh = st.slider("Flood Sensitivity", -15.0, -2.0, -6.0)
-                exclude_perm = st.checkbox("Hide Permanent Water", value=True)
-                flood_mask = (diff < thresh).astype(float)
-                if exclude_perm: flood_mask[before_db < -16] = 0
-                create_geotiff_download(flood_mask, "Flood_Map.tif", *st.session_state.last_search_coords_s1, key="dl_f")
-
-            with col_map:
-                m_flood = folium.Map(location=[st.session_state.last_search_coords_s1[0], st.session_state.last_search_coords_s1[1]], zoom_start=12, tiles=selected_basemap)
-                bg_vv = np.dstack([np.clip(st.session_state.image_cache_s1[after_date][:,:,0]*brightness, 0, 1)]*3)
-                folium.raster_layers.ImageOverlay(image=get_image_url(bg_vv), bounds=st.session_state.current_bounds_s1, opacity=0.5).add_to(m_flood)
-                
-                h = flood_color.lstrip('#')
-                rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
-                mask_rgb = np.zeros((*flood_mask.shape, 4))
-                mask_rgb[flood_mask == 1] = [*rgb, 0.8]
-                folium.raster_layers.ImageOverlay(image=get_image_url(mask_rgb), bounds=st.session_state.current_bounds_s1).add_to(m_flood)
-                st_folium(m_flood, height=600, width=None, key="f_map_final")
+            thresh = st.slider("Flood Sensitivity", -15.0, -2.0, -6.0)
+            flood_mask = (diff < thresh).astype(float)
+            
+            if st.checkbox("Clean Permanent Water"):
+                flood_mask[before_db < -16] = 0
+            
+            m_flood = folium.Map(location=[lat, lon], zoom_start=13, tiles=selected_basemap)
+            
+            # Show "After" image as background
+            bg = np.dstack([np.clip(st.session_state.image_cache_s1[after_date][:,:,0]*brightness, 0, 1)]*3)
+            folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.4).add_to(m_flood)
+            
+            # Show Flood in Bright Red
+            mask_rgb = np.zeros((*flood_mask.shape, 4))
+            mask_rgb[flood_mask == 1] = [1, 0, 0, 0.8] 
+            folium.raster_layers.ImageOverlay(image=get_image_url(mask_rgb), bounds=st.session_state.current_bounds_s1).add_to(m_flood)
+            
+            st_folium(m_flood, height=600, width=None, key="f_map")
+            create_geotiff_download(flood_mask, "Flood_Detection.tif", lat, lon, r_km, key="dl_f")
         else:
-            st.info("Render at least 2 images in the Dashboard to enable Flood Mapping.")
+            st.info("Please render at least two images in the Dashboard to run flood analysis.")
 
 else:
-    st.info("👋 Enter your Sentinel Hub credentials in the sidebar to begin.")
+    st.info("Login to access Radar Search.")
