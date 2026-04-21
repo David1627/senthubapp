@@ -16,3 +16,17 @@ io
 freeglut3-dev
 libgl1-mesa-dev
 libgdal-dev
+streamlit
+sentinelhub
+matplotlib
+numpy
+geopy
+streamlit-folium
+folium
+rasterio
+tifffile
+pandas
+Pillow
+osmnx
+shapely
+pyproj
