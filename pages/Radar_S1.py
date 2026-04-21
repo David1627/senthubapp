@@ -55,13 +55,13 @@ CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Search Area")
-city_name = st.sidebar.text_input("City Name", "Valencia, Spain")
-radius_km = st.sidebar.slider("Radius (km)", 1, 45, 10)
-date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2025, 10, 1), datetime.date(2025, 11, 15)))
+city_name = st.sidebar.text_input("City Name", "Input City, Input Country")
+radius_km = st.sidebar.slider("Radius (km)", 1, 60, 10)
+date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2026, 101 1), datetime.date(2026, 03, 01)))
 
 with st.sidebar.expander("📍 Manual Coords"):
-    man_lat = st.number_input("Lat", value=39.4699, format="%.4f")
-    man_lon = st.number_input("Lon", value=-0.3763, format="%.4f")
+    man_lat = st.number_input("Lat", value=39.02743928102668, format="%.4f")
+    man_lon = st.number_input("Lon", value=-8.84019840904881, format="%.4f")
     use_manual = st.checkbox("Force Manual")
 
 btn_search = st.sidebar.button("🔍 SEARCH RADAR", type="primary", use_container_width=True)
@@ -115,7 +115,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 for d_str in sel_dates:
                     actual_date = res[int(d_str.split(":")[0])]['properties']['datetime']
                     req = SentinelHubRequest(evalscript=evalscript, input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(actual_date, actual_date))],
-                                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(600, 900), config=config)
+                                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(600, 600), config=config)
                     st.session_state.image_cache_s1[actual_date] = req.get_data()[0]
 
             if st.session_state.image_cache_s1:
@@ -141,7 +141,7 @@ if CLIENT_ID and CLIENT_SECRET:
 
                             m = folium.Map(location=[lat, lon], zoom_start=12, tiles=selected_basemap)
                             folium.raster_layers.ImageOverlay(image=get_image_url(img), bounds=st.session_state.current_bounds_s1).add_to(m)
-                            st_folium(m, height=350, width=500, key=f"map_{i}_{actual_date}")
+                            st_folium(m, height=500, width=350, key=f"map_{i}_{actual_date}")
 
     with tab_ana:
         if st.session_state.image_cache_s1:
