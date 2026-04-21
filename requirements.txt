@@ -13,3 +13,6 @@ osmnx
 base64
 datetime
 io
+freeglut3-dev
+libgl1-mesa-dev
+libgdal-dev
