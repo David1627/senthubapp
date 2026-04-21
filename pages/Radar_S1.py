@@ -151,7 +151,12 @@ if CLIENT_ID and CLIENT_SECRET:
             lab_after = c_lab2.selectbox("Plot Right (Crisis)", d_list, index=1)
             cmap_choice = c_lab3.selectbox("Color Ramp", ["viridis", "magma", "inferno", "plasma", "cividis", "Greys_r", "Blues", "YlGnBu", "winter", 'coolwarm', 'bwr', 'tab20c', 'brg','binary', 'gist_yarg', 'gist_gray', 'gray', 'bone','pink', 'spring', 'summer', 'autumn', 'winter', 'cool',
                       'Wistia', 'hot', 'afmhot', 'gist_heat', 'copper', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu',
-                      'RdYlGn', 'Spectral', 'coolwarm', 'bwr', 'seismic',
+                      'RdYlGn', 'Spectral', 'coolwarm', 'bwr', 'seismic', 'twilight', 'twilight_shifted', 'hsv', 'Pastel1', 'Pastel2', 'Paired', 'Accent', 'Dark2',
+                      'Set1', 'Set2', 'Set3', 'tab10', 'tab20', 'tab20b',
+                      'tab20c', 'flag', 'prism', 'ocean', 'gist_earth', 'terrain',
+                      'gist_stern', 'gnuplot', 'gnuplot2', 'CMRmap',
+                      'cubehelix', 'brg', 'gist_rainbow', 'rainbow', 'jet',
+                      'turbo', 'nipy_spectral', 'gist_ncar',
                       'berlin', 'managua', 'vanimo'])
             
             db_min, db_max = st.slider("Intensity Range (dB)", -35, 5, (-25, -5))
