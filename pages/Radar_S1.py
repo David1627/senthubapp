@@ -31,7 +31,10 @@ if 'current_bounds_s1' not in st.session_state: st.session_state.current_bounds_
 
 # --- HELPER FUNCTIONS ---
 def get_image_url(np_img):
-    img = Image.fromarray((np_img * 255).astype(np.uint8))
+    if np_img is None: return ""
+    # Ensure values are 0-255 for PIL
+    img_data = (np_img * 255).astype(np.uint8)
+    img = Image.fromarray(img_data)
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     return f"data:image/png;base64,{base64.base64encode(buffered.getvalue()).decode()}"
@@ -52,7 +55,7 @@ def create_geojson_download(mask, lat, lon, radius_km):
     shapes = features.shapes(mask_int, mask=(mask_int > 0), transform=transform)
     features_list = [{"type": "Feature", "properties": {"class": "flood_area"}, "geometry": geom} for geom, val in shapes]
     geojson_data = {"type": "FeatureCollection", "features": features_list}
-    return st.download_button(label="📐 Download Flood GeoJSON", data=json.dumps(geojson_data), file_name="flood.geojson", mime="application/json", use_container_width=True)
+    return st.download_button(label="📐 Download GeoJSON", data=json.dumps(geojson_data), file_name="flood.geojson", mime="application/json", use_container_width=True)
 
 # --- SIDEBAR ---
 st.sidebar.header("1. Credentials")
@@ -78,12 +81,12 @@ with st.sidebar.expander("📍 Manual X/Y Coords"):
 
 st.sidebar.markdown("---")
 st.sidebar.header("3. Visualization")
-brightness = st.sidebar.slider("Radar Gain (Gamma)", 0.5, 10.0, 3.0)
+brightness = st.sidebar.slider("Radar Gain", 0.5, 10.0, 3.0)
 selected_basemap = st.sidebar.selectbox("Base Map", ["OpenStreetMap", "Esri World Imagery", "CartoDB Positron"])
 
 btn_search = st.sidebar.button("🔍 FETCH RADAR DATA", type="primary", use_container_width=True)
 
-# --- CORE SEARCH LOGIC ---
+# --- SEARCH LOGIC ---
 if CLIENT_ID and CLIENT_SECRET:
     config = SHConfig(sh_client_id=CLIENT_ID, sh_client_secret=CLIENT_SECRET)
 
@@ -96,8 +99,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 location = geolocator.geocode(city_query, timeout=10)
                 if location:
                     lat, lon = location.latitude, location.longitude
-                    st.sidebar.success(f"📍 Found: {lat}, {lon}")
-                else: st.error("City not found. Using manual.")
+                else: st.error("City not found.")
             except: st.error("Geocoding timeout.")
 
         if use_manual or (lat is None): lat, lon = man_lat, man_lon
@@ -135,19 +137,27 @@ if CLIENT_ID and CLIENT_SECRET:
 
             if st.session_state.image_cache_s1:
                 cols = st.columns(2)
-                for i, d_key in enumerate(st.session_state.image_cache_s1.keys()):
-                    with cols[i % 2]:
-                        data = st.session_state.image_cache_s1[d_key]
-                        pol = st.radio(f"Polarization ({d_key[:10]})", ["VV", "VH", "False Color"], key=f"p_{i}", horizontal=True)
-                        if pol == "VV": img = np.dstack([np.clip(data[:,:,0]*brightness,0,1)]*3)
-                        elif pol == "VH": img = np.dstack([np.clip(data[:,:,1]*brightness*2,0,1)]*3)
-                        else:
-                            ratio = np.clip(data[:,:,0]/(data[:,:,1]+1e-5),0,1)
-                            img = np.dstack([np.clip(data[:,:,0]*brightness,0,1), np.clip(data[:,:,1]*brightness,0,1), ratio])
-                        
-                        m = folium.Map(location=[lat, lon], zoom_start=12, tiles=selected_basemap)
-                        folium.raster_layers.ImageOverlay(image=get_image_url(img), bounds=st.session_state.current_bounds_s1).add_to(m)
-                        st_folium(m, height=350, width=None, key=f"map_{i}")
+                for i, d_key in enumerate(sel_dates):
+                    actual_date = res[int(d_key.split(":")[0])]['properties']['datetime']
+                    if actual_date in st.session_state.image_cache_s1:
+                        with cols[i % 2]:
+                            data = st.session_state.image_cache_s1[actual_date]
+                            pol = st.radio(f"Mode ({actual_date[:10]})", ["VV", "VH", "False Color"], key=f"p_{i}", horizontal=True)
+                            
+                            # Build image array
+                            if pol == "VV": 
+                                img = np.dstack([np.clip(data[:,:,0]*brightness,0,1)]*3)
+                            elif pol == "VH": 
+                                img = np.dstack([np.clip(data[:,:,1]*brightness*2,0,1)]*3)
+                            else:
+                                ratio = np.clip(data[:,:,0]/(data[:,:,1]+1e-5),0,1)
+                                img = np.dstack([np.clip(data[:,:,0]*brightness,0,1), np.clip(data[:,:,1]*brightness,0,1), ratio])
+                            
+                            m = folium.Map(location=[lat, lon], zoom_start=12, tiles=selected_basemap)
+                            img_url = get_image_url(img)
+                            if img_url:
+                                folium.raster_layers.ImageOverlay(image=img_url, bounds=st.session_state.current_bounds_s1).add_to(m)
+                                st_folium(m, height=350, width=None, key=f"map_{i}")
 
     with tab_ana:
         if st.session_state.image_cache_s1:
@@ -164,7 +174,7 @@ if CLIENT_ID and CLIENT_SECRET:
             c1, c2, c3 = st.columns(3)
             before = c1.selectbox("Baseline (Dry)", d_list, index=0)
             after = c2.selectbox("Crisis (Wet)", d_list, index=1)
-            f_color = c3.color_picker("Flood Color", "#00FFFF")
+            f_color = c3.color_picker("Flood Color", "#FF0000")
 
             b_db = 10 * np.log10(st.session_state.image_cache_s1[before][:,:,0] + 1e-10)
             a_db = 10 * np.log10(st.session_state.image_cache_s1[after][:,:,0] + 1e-10)
@@ -181,6 +191,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 m_f = folium.Map(location=[lat, lon], zoom_start=12, tiles=selected_basemap)
                 bg = np.dstack([np.clip(st.session_state.image_cache_s1[after][:,:,0]*brightness,0,1)]*3)
                 folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.4).add_to(m_f)
+                
                 h = f_color.lstrip('#'); rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
                 mask_rgb = np.zeros((*flood_mask.shape, 4))
                 mask_rgb[flood_mask == 1] = [*rgb, 0.8]
