@@ -211,7 +211,7 @@ if CLIENT_ID and CLIENT_SECRET:
             with col_m:
                 m_f = folium.Map(location=[st.session_state.last_search_coords_s1[0], st.session_state.last_search_coords_s1[1]], zoom_start=12, tiles=selected_basemap)
                 bg = np.dstack([np.clip(st.session_state.image_cache_s1[after][:,:,0]*brightness, 0, 1)]*3)
-                folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.9).add_to(m_f)
+                folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0).add_to(m_f)
                 h = f_color.lstrip('#'); rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
                 mask_rgb = np.zeros((*flood_mask.shape, 4))
                 mask_rgb[flood_mask == 1] = [*rgb, 0.8]
