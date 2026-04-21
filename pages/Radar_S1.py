@@ -149,7 +149,7 @@ if CLIENT_ID and CLIENT_SECRET:
             data = st.session_state.image_cache_s1[ana_date]
             db_val = 10 * np.log10(data[:,:,0] + 1e-10)
             
-            fig, ax = plt.subplots(figsize=(8, 4))
+            fig, ax = plt.subplots(figsize=(6, 3))
             im = ax.imshow(db_val, cmap='Blues_r', vmin=-25, vmax=0)
             plt.colorbar(im, label="Backscatter (dB)")
             ax.set_title(f"Radar Analysis - {ana_date[:10]}")
