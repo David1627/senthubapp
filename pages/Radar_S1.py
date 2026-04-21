@@ -149,7 +149,7 @@ if CLIENT_ID and CLIENT_SECRET:
             c_lab1, c_lab2, c_lab3 = st.columns([1,1,1])
             lab_before = c_lab1.selectbox("Plot Left (Baseline)", d_list, index=0)
             lab_after = c_lab2.selectbox("Plot Right (Crisis)", d_list, index=1)
-            cmap_choice = c_lab3.selectbox("Color Ramp", ["viridis", "magma", "inferno", "plasma", "cividis", "Greys_r", "Blues", "YlGnBu", "winter"])
+            cmap_choice = c_lab3.selectbox("Color Ramp", ["viridis", "magma", "inferno", "plasma", "cividis", "Greys_r", "Blues", "YlGnBu", "winter", 'coolwarm', 'bwr'])
             
             db_min, db_max = st.slider("Intensity Range (dB)", -35, 5, (-25, -5))
 
