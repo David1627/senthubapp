@@ -10,27 +10,25 @@ import datetime
 import folium
 from streamlit_folium import st_folium
 import base64
-import json
 from io import BytesIO
 from PIL import Image
 import rasterio
 from rasterio import features
 from rasterio.transform import from_bounds
-from rasterio.io import MemoryFile
 import osmnx as ox
-from shapely.geometry import shape, mapping
+from shapely.geometry import shape
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="S1 Flood Intelligence", page_icon="🛰️")
+st.set_page_config(layout="wide", page_title="S1 Flood Analyzer", page_icon="🛰️")
 
-# --- SESSION STATE INITIALIZATION ---
-if 'lat' not in st.session_state: st.session_state.lat = 39.4699
-if 'lon' not in st.session_state: st.session_state.lon = -0.3763
+# --- 1. INITIALIZE SESSION STATE (Keep everything synced) ---
+if 'lat' not in st.session_state: st.session_state.lat = None
+if 'lon' not in st.session_state: st.session_state.lon = None
 if 'img_cache' not in st.session_state: st.session_state.img_cache = {}
 if 'search_results' not in st.session_state: st.session_state.search_results = None
-if 'buildings_gdf' not in st.session_state: st.session_state.buildings_gdf = None
+if 'flood_sens' not in st.session_state: st.session_state.flood_sens = -6.0
 
-# --- HELPER FUNCTIONS ---
+# --- HELPER: ENCODING ---
 def get_image_url(np_img):
     try:
         img_8bit = (np.clip(np_img, 0, 1) * 255).astype(np.uint8)
@@ -40,137 +38,133 @@ def get_image_url(np_img):
         return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
     except: return ""
 
-def fetch_buildings(lat, lon, radius_km):
-    try:
-        offset = (radius_km / 111.32) / 2
-        gdf = ox.features_from_bbox(lat+offset, lat-offset, lon+offset, lon-offset, tags={'building': True})
-        return gdf[['geometry']]
-    except: return None
-
-# --- SIDEBAR CONTROLS ---
+# --- SIDEBAR: GLOBAL CONTROLS ---
 with st.sidebar:
-    st.header("🔑 Authentication")
-    CLIENT_ID = st.text_input("Client ID", type="password")
-    CLIENT_SECRET = st.text_input("Client Secret", type="password")
+    st.header("🔑 1. Sentinel Hub Auth")
+    c_id = st.text_input("Client ID", value="", placeholder="Paste ID here...")
+    c_sec = st.text_input("Client Secret", value="", type="password", placeholder="Paste Secret here...")
     
     st.markdown("---")
-    st.header("📍 Location Discovery")
+    st.header("📍 2. Search & Location")
     
-    # City Search
-    city_input = st.text_input("Search City", placeholder="e.g. Valencia, Spain")
-    if st.button("🔍 Locate City"):
-        if city_input:
-            loc = Nominatim(user_agent="flood_app").geocode(city_input)
-            if loc:
-                st.session_state.lat, st.session_state.lon = loc.latitude, loc.longitude
-                st.success(f"Found: {loc.latitude:.4f}, {loc.longitude:.4f}")
-    
-    # Manual Override
-    st.session_state.lat = st.number_input("Latitude", value=st.session_state.lat, format="%.6f")
-    st.session_state.lon = st.number_input("Longitude", value=st.session_state.lon, format="%.6f")
-    
-    st.markdown("---")
-    radius = st.slider("Radius (km)", 1, 20, 5)
-    date_range = st.date_input("Date Window", [datetime.date(2024, 10, 25), datetime.date(2024, 11, 5)])
-    
-    btn_run = st.button("🚀 SEARCH RADAR DATA", type="primary", use_container_width=True)
+    # City Search logic
+    city_q = st.text_input("Search City", value="", placeholder="e.g. Valencia, Spain")
+    if st.button("🔍 Resolve Location"):
+        if city_q:
+            try:
+                loc = Nominatim(user_agent="flood_explorer").geocode(city_q)
+                if loc:
+                    st.session_state.lat = loc.latitude
+                    st.session_state.lon = loc.longitude
+                    st.success(f"Found: {loc.latitude:.4f}, {loc.longitude:.4f}")
+            except: st.error("Geocoding service timed out.")
 
-# --- CORE ENGINE ---
-if CLIENT_ID and CLIENT_SECRET:
-    config = SHConfig(sh_client_id=CLIENT_ID, sh_client_secret=CLIENT_SECRET)
+    # Manual Coords (Empty by default, synced with City search)
+    st.session_state.lat = st.number_input("Latitude (X)", value=st.session_state.lat if st.session_state.lat else 0.0, format="%.6f")
+    st.session_state.lon = st.number_input("Longitude (Y)", value=st.session_state.lon if st.session_state.lon else 0.0, format="%.6f")
     
-    if btn_run:
-        with st.spinner("Fetching Data..."):
+    radius = st.slider("Radius (km)", 1, 20, 5)
+    date_range = st.date_input("Analysis Dates", [])
+    
+    st.markdown("---")
+    btn_run = st.button("🚀 FETCH RADAR DATA", type="primary", use_container_width=True)
+
+# --- CORE ENGINE: AUTH & FETCH ---
+if btn_run:
+    if not (c_id and c_sec):
+        st.warning("Please enter credentials.")
+    elif st.session_state.lat == 0.0:
+        st.warning("Please search for a city or enter coordinates.")
+    elif len(date_range) < 2:
+        st.warning("Please select a date range (Start and End).")
+    else:
+        try:
+            config = SHConfig(sh_client_id=c_id, sh_client_secret=c_sec)
             cat = SentinelHubCatalog(config=config)
+            
             off = (radius / 111.32) / 2
             bbox = BBox(bbox=[st.session_state.lon-off, st.session_state.lat-off, st.session_state.lon+off, st.session_state.lat+off], crs=CRS.WGS84)
             
-            # Search Results
-            search = cat.search(DataCollection.SENTINEL1_IW, bbox=bbox, time=(str(date_range[0]), str(date_range[1])))
-            st.session_state.search_results = list(search)
-            
-            # Fetch OSM Buildings
-            st.session_state.buildings_gdf = fetch_buildings(st.session_state.lat, st.session_state.lon, radius)
-            st.session_state.img_cache = {} 
-
-    # --- TABS ---
-    tab_dash, tab_lab, tab_flood = st.tabs(["🗺️ Dashboard", "🧪 Advanced Lab", "🚨 Flood Impact"])
-
-    with tab_dash:
-        if st.session_state.search_results:
-            res = st.session_state.search_results
-            opts = [f"{i}: {r['properties']['datetime'][:10]}" for i,r in enumerate(res)]
-            picks = st.multiselect("Dates to render:", opts, default=opts[:min(2, len(opts))])
-            
-            if st.button("🖼️ Render Maps"):
-                off = (radius / 111.32) / 2
-                bbox_obj = BBox(bbox=[st.session_state.lon-off, st.session_state.lat-off, st.session_state.lon+off, st.session_state.lat+off], crs=CRS.WGS84)
-                evalscript = "//VERSION=3\nfunction setup(){return{input:['VV'],output:{bands:1,sampleType:'FLOAT32'}};}function evaluatePixel(s){return[s.VV];}"
+            with st.spinner("Accessing Sentinel Hub Catalog..."):
+                search = cat.search(DataCollection.SENTINEL1_IW, bbox=bbox, time=(str(date_range[0]), str(date_range[1])))
+                st.session_state.search_results = list(search)
+                st.session_state.img_cache = {} # Clear old images
+                st.success(f"Found {len(st.session_state.search_results)} radar captures.")
                 
-                for p in picks:
-                    d = res[int(p.split(":")[0])]['properties']['datetime']
-                    req = SentinelHubRequest(evalscript=evalscript, input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(d,d))],
-                                           responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(600, 600), config=config)
-                    st.session_state.img_cache[d] = req.get_data()[0]
+        except Exception as e:
+            if "InvalidClientError" in str(e):
+                st.error("❌ **Authentication Failed**: The Client ID or Secret is incorrect. Check your Sentinel Hub dashboard for typos.")
+            else:
+                st.error(f"Error: {e}")
 
-            if st.session_state.img_cache:
-                cols = st.columns(len(st.session_state.img_cache))
-                for i, (dk, data) in enumerate(st.session_state.img_cache.items()):
-                    with cols[i]:
-                        st.caption(f"Radar Date: {dk[:10]}")
-                        m = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
-                        off = (radius / 111.32) / 2
-                        bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
-                        folium.raster_layers.ImageOverlay(get_image_url(data*3), bounds=bnds, opacity=0.7).add_to(m)
-                        st_folium(m, height=350, key=f"map_{dk}")
+# --- TABS: CONTENT PERSISTENCE ---
+tab1, tab2, tab3 = st.tabs(["🗺️ Dashboard", "🧪 Radar Lab", "🚨 Flood Impact"])
 
-    with tab_lab:
-        if len(st.session_state.img_cache) >= 2:
-            st.subheader("🧪 Side-by-Side Analysis")
-            c1, c2, c3 = st.columns(3)
-            d1 = c1.selectbox("Left (Baseline)", list(st.session_state.img_cache.keys()), index=0)
-            d2 = c2.selectbox("Right (Crisis)", list(st.session_state.img_cache.keys()), index=1)
-            cmap = c3.selectbox("Colormap", ["viridis", "inferno", "Greys_r", "RdBu"])
-            
-            # Use LaTeX for formal dB calculation
-            # $$dB = 10 \cdot \log_{10}(Intensity)$$
-            db1 = 10 * np.log10(st.session_state.img_cache[d1][:,:,0] + 1e-10)
-            db2 = 10 * np.log10(st.session_state.img_cache[d2][:,:,0] + 1e-10)
-            
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-            ax1.imshow(db1, cmap=cmap, vmin=-25, vmax=-5); ax1.set_title(d1[:10]); ax1.axis('off')
-            ax2.imshow(db2, cmap=cmap, vmin=-25, vmax=-5); ax2.set_title(d2[:10]); ax2.axis('off')
-            st.pyplot(fig)
-
-    with tab_flood:
-        if len(st.session_state.img_cache) >= 2:
-            st.subheader("🚨 Damage Assessment")
-            # All options are preserved here from the Sidebar
-            sens = st.slider("Flood Sensitivity (dB Drop)", -15.0, -2.0, -6.0)
-            
-            # Simple Change Detection
-            d_keys = list(st.session_state.img_cache.keys())
-            diff = (10*np.log10(st.session_state.img_cache[d_keys[1]]+1e-10)) - (10*np.log10(st.session_state.img_cache[d_keys[0]]+1e-10))
-            flood_mask = (diff < sens).astype(np.uint8)
-            
-            m_final = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=14)
+with tab1:
+    if st.session_state.search_results:
+        res = st.session_state.search_results
+        opts = [f"{i}: {r['properties']['datetime'][:10]}" for i,r in enumerate(res)]
+        picks = st.multiselect("Select captures to render:", opts)
+        
+        if st.button("🖼️ Render Selected"):
+            config = SHConfig(sh_client_id=c_id, sh_client_secret=c_sec)
             off = (radius / 111.32) / 2
-            bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
+            bbox_obj = BBox(bbox=[st.session_state.lon-off, st.session_state.lat-off, st.session_state.lon+off, st.session_state.lat+off], crs=CRS.WGS84)
+            es = "//VERSION=3\nfunction setup(){return{input:['VV'],output:{bands:1,sampleType:'FLOAT32'}};}function evaluatePixel(s){return[s.VV];}"
             
-            # Render Flood (Red Overlay)
-            f_overlay = np.zeros((600,600,4))
-            f_overlay[flood_mask[:,:,0]==1] = [1, 0, 0, 0.6]
-            folium.raster_layers.ImageOverlay(get_image_url(f_overlay), bounds=bnds).add_to(m_final)
-            
-            if st.session_state.buildings_gdf is not None:
-                folium.GeoJson(st.session_state.buildings_gdf, style_function=lambda x: {'color':'orange','weight':1}).add_to(m_final)
-                st.info(f"Loaded {len(st.session_state.buildings_gdf)} building footprints for this area.")
-            
-            st_folium(m_final, height=600, width=1200)
+            for p in picks:
+                d = res[int(p.split(":")[0])]['properties']['datetime']
+                req = SentinelHubRequest(evalscript=es, input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(d,d))],
+                                       responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(600, 600), config=config)
+                st.session_state.img_cache[d] = req.get_data()[0]
 
-else:
-    st.warning("⚠️ Please enter your Sentinel Hub Credentials in the Sidebar to continue.")
+        if st.session_state.img_cache:
+            cols = st.columns(len(st.session_state.img_cache))
+            for i, (dk, data) in enumerate(st.session_state.img_cache.items()):
+                with cols[i]:
+                    st.caption(f"Date: {dk[:10]}")
+                    m = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
+                    off = (radius / 111.32) / 2
+                    bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
+                    folium.raster_layers.ImageOverlay(get_image_url(data*3), bounds=bnds).add_to(m)
+                    st_folium(m, height=300, key=f"map_{dk}")
 
-# --- THE FIX FOR THE SYNTAX ERROR ---
-# This else belongs to the 'if CLIENT_ID and CLIENT_SECRET' block.
-# If no credentials, we show the warning above.
+with tab2:
+    if len(st.session_state.img_cache) >= 2:
+        st.subheader("Comparison Analysis")
+        d_keys = list(st.session_state.img_cache.keys())
+        c1, c2 = st.columns(2)
+        v1 = 10*np.log10(st.session_state.img_cache[d_keys[0]][:,:,0]+1e-10)
+        v2 = 10*np.log10(st.session_state.img_cache[d_keys[1]][:,:,0]+1e-10)
+        
+        fig, ax = plt.subplots(1,2)
+        ax[0].imshow(v1, cmap='gray', vmin=-25, vmax=-5); ax[0].axis('off'); ax[0].set_title(d_keys[0][:10])
+        ax[1].imshow(v2, cmap='gray', vmin=-25, vmax=-5); ax[1].axis('off'); ax[1].set_title(d_keys[1][:10])
+        st.pyplot(fig)
+
+with tab3:
+    if len(st.session_state.img_cache) >= 2:
+        st.subheader("🚨 Flood Detection Settings")
+        
+        # Options inside the tab that don't reset
+        st.session_state.flood_sens = st.slider("Detection Sensitivity (dB Change)", -15.0, -2.0, st.session_state.flood_sens)
+        
+        d_keys = list(st.session_state.img_cache.keys())
+        diff = (10*np.log10(st.session_state.img_cache[d_keys[1]]+1e-10)) - (10*np.log10(st.session_state.img_cache[d_keys[0]]+1e-10))
+        mask = (diff < st.session_state.flood_sens).astype(np.uint8)
+        
+        m_flood = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
+        off = (radius / 111.32) / 2
+        bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
+        
+        # Background
+        folium.raster_layers.ImageOverlay(get_image_url(st.session_state.img_cache[d_keys[1]]*3), bounds=bnds, opacity=0.4).add_to(m_flood)
+        
+        # Flood Layer (Red)
+        f_overlay = np.zeros((600,600,4))
+        f_overlay[mask[:,:,0]==1] = [1, 0, 0, 0.6]
+        folium.raster_layers.ImageOverlay(get_image_url(f_overlay), bounds=bnds).add_to(m_flood)
+        
+        st_folium(m_flood, height=500, width=1000)
+    else:
+        st.info("Render at least 2 radar dates in the Dashboard to calculate flood impact.")
