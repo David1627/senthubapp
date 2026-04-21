@@ -12,3 +12,5 @@ Pillow
 osmnx
 shapely
 pyproj
+geopandas
+shapely
