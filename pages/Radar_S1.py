@@ -141,7 +141,7 @@ if CLIENT_ID and CLIENT_SECRET:
 
                             m = folium.Map(location=[lat, lon], zoom_start=12, tiles=selected_basemap)
                             folium.raster_layers.ImageOverlay(image=get_image_url(img), bounds=st.session_state.current_bounds_s1).add_to(m)
-                            st_folium(m, height=500, width=350, key=f"map_{i}_{actual_date}")
+                            st_folium(m, height=500, width=650, key=f"map_{i}_{actual_date}")
 
     with tab_ana:
         if st.session_state.image_cache_s1:
