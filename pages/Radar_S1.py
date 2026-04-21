@@ -154,7 +154,7 @@ if CLIENT_ID and CLIENT_SECRET:
             db_min, db_max = st.slider("Intensity Range (dB)", -35, 5, (-25, -5))
 
             # --- PLOTTING ---
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 3))
             
             data_left = 10 * np.log10(st.session_state.image_cache_s1[lab_before][:,:,0] + 1e-10)
             data_right = 10 * np.log10(st.session_state.image_cache_s1[lab_after][:,:,0] + 1e-10)
@@ -167,7 +167,7 @@ if CLIENT_ID and CLIENT_SECRET:
             ax2.set_title(f"RIGHT: {lab_after[:10]} (dB)")
             ax2.axis('off')
             
-            fig.colorbar(im2, ax=[ax1, ax2], label="Backscatter Intensity (dB)", orientation='horizontal', pad=0.1)
+            fig.colorbar(im2, ax=[ax1, ax2], label="Backscatter Intensity (dB)", orientation='horizontal', pad=0.05)
             st.pyplot(fig)
             
             # --- HISTOGRAM SECTION ---
