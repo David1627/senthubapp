@@ -98,11 +98,21 @@ if CLIENT_ID and CLIENT_SECRET:
         st.session_state.image_cache_s1 = {}
         
         # New Value: OSM Building Fetch
+        # Enhanced Infrastructure Fetch
         if fetch_infra:
-            with st.spinner("Downloading Infrastructure..."):
+            with st.spinner("🛰️ Downloading Building Footprints from OSM..."):
                 try:
-                    st.session_state.buildings_gdf = ox.features_from_bbox(lat+offset, lat-offset, lon+offset, lon-offset, tags={'building': True})
-                except: st.session_state.buildings_gdf = None
+                    # Using a slightly smaller box than the radar to ensure fast return
+                    st.session_state.buildings_gdf = ox.features_from_point(
+                        (lat, lon), 
+                        dist=radius_km * 1000, 
+                        tags={'building': True}
+                    )
+                    if st.session_state.buildings_gdf is not None:
+                        st.sidebar.success(f"✅ {len(st.session_state.buildings_gdf)} buildings loaded!")
+                except Exception as e:
+                    st.sidebar.warning("⚠️ OSM Timeout. Try a smaller radius (1-5km).")
+                    st.session_state.buildings_gdf = None
 
         catalog = SentinelHubCatalog(config=config)
         bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
