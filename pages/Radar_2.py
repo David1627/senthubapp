@@ -18,19 +18,17 @@ from rasterio import features
 from rasterio.transform import from_bounds
 from rasterio.io import MemoryFile
 import time
-import osmnx as ox  # <--- New for the Handshake
-from shapely.geometry import box
+import osmnx as ox
+from shapely.geometry import box, shape, mapping
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="S1 Flood Explorer Pro", page_icon="🌊")
+st.set_page_config(layout="wide", page_title="S1 Flood Intelligence Pro", page_icon="🏢")
 
 # --- INITIALIZE SESSION STATE ---
-if 'search_results_s1' not in st.session_state: st.session_state.search_results_s1 = None
-if 'image_cache_s1' not in st.session_state: st.session_state.image_cache_s1 = {}
-if 'app_uuid_s1' not in st.session_state: st.session_state.app_uuid_s1 = str(uuid.uuid4())
-if 'last_search_coords_s1' not in st.session_state: st.session_state.last_search_coords_s1 = None
-if 'current_bounds_s1' not in st.session_state: st.session_state.current_bounds_s1 = None
-if 'water_mask' not in st.session_state: st.session_state.water_mask = None
+for key in ['search_results_s1', 'image_cache_s1', 'last_search_coords_s1', 
+            'current_bounds_s1', 'water_mask', 'building_gdf']:
+    if key not in st.session_state: st.session_state[key] = None
+if 'app_uuid' not in st.session_state: st.session_state.app_uuid = str(uuid.uuid4())
 
 # --- HELPER FUNCTIONS ---
 def get_image_url(np_img):
@@ -43,175 +41,184 @@ def get_image_url(np_img):
         return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
     except: return ""
 
-def fetch_osm_water_mask(lat, lon, radius_km, shape):
-    """Fetches water bodies from OSM and returns a mask matching the radar data shape."""
+def fetch_osm_geometries(lat, lon, radius_km, mask_shape):
     offset = (radius_km / 111.32) / 2
-    bbox = (lat - offset, lat + offset, lon - offset, lon + offset) # (south, north, west, east)
+    bbox = (lat - offset, lat + offset, lon - offset, lon + offset)
     
+    # 1. Fetch Water Mask
     try:
-        # Fetch water geometries (oceans, rivers, lakes)
-        tags = {'natural': 'water', 'landuse': 'reservoir', 'waterway': ['riverbank', 'dock']}
-        gdf = ox.features_from_bbox(bbox[1], bbox[0], bbox[3], bbox[2], tags=tags)
-        
-        if gdf.empty: return np.zeros(shape, dtype=np.uint8)
+        w_tags = {'natural': 'water', 'landuse': 'reservoir', 'waterway': 'riverbank'}
+        w_gdf = ox.features_from_bbox(bbox[1], bbox[0], bbox[3], bbox[2], tags=w_tags)
+        transform = from_bounds(lon-offset, lat-offset, lon+offset, lat+offset, mask_shape[1], mask_shape[0])
+        w_mask = features.rasterize([(geom, 1) for geom in w_gdf.geometry], out_shape=mask_shape, transform=transform, fill=0)
+    except: w_mask = np.zeros(mask_shape)
 
-        # Create transform to map polygons to our pixel grid
-        transform = from_bounds(lon-offset, lat-offset, lon+offset, lat+offset, shape[1], shape[0])
-        
-        # Rasterize the polygons: 1 for water, 0 for land
-        mask = features.rasterize(
-            [(geom, 1) for geom in gdf.geometry],
-            out_shape=shape,
-            transform=transform,
-            fill=0,
-            dtype='uint8'
-        )
-        return mask
-    except:
-        return np.zeros(shape, dtype=np.uint8)
+    # 2. Fetch Buildings
+    try:
+        b_tags = {'building': True}
+        b_gdf = ox.features_from_bbox(bbox[1], bbox[0], bbox[3], bbox[2], tags=b_tags)
+    except: b_gdf = None
+    
+    return w_mask, b_gdf
+
+def export_geotiff(data, filename, lat, lon, radius_km, key):
+    offset = (radius_km / 111.32) / 2
+    transform = from_bounds(lon-offset, lat-offset, lon+offset, lat+offset, data.shape[1], data.shape[0])
+    with MemoryFile() as memfile:
+        with memfile.open(driver='GTiff', height=data.shape[0], width=data.shape[1], count=1,
+                          dtype='float32', crs='EPSG:4326', transform=transform) as ds:
+            ds.write(data.astype('float32'), 1)
+        return st.download_button(f"💾 TIFF: {filename}", memfile.read(), filename, "image/tiff", key=key)
 
 # --- SIDEBAR ---
-st.sidebar.header("1. Credentials")
+st.sidebar.header("🛰️ Project Setup")
 CLIENT_ID = st.sidebar.text_input("Client ID", type="password")
 CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
 
 st.sidebar.markdown("---")
-st.sidebar.header("2. Search Area")
-search_mode = st.sidebar.radio("Location Mode:", ["Search City", "Manual Coordinates"])
-city_query = st.sidebar.text_input("City Name", "Valencia, Spain") if search_mode == "Search City" else None
-radius_km = st.sidebar.slider("Radius (km)", 1, 50, 10)
-date_range = st.sidebar.date_input("Date Window", value=(datetime.date(2024, 10, 20), datetime.date(2024, 11, 15)))
+search_mode = st.sidebar.radio("Location:", ["City", "Manual"])
+city_q = st.sidebar.text_input("City", "Valencia") if search_mode=="City" else ""
+radius = st.sidebar.slider("Radius (km)", 1, 20, 5)
+dates = st.sidebar.date_input("Window", [datetime.date(2024, 10, 25), datetime.date(2024, 11, 5)])
 
 st.sidebar.markdown("---")
-st.sidebar.header("3. Smart Filters")
-exclude_sea_osm = st.sidebar.checkbox("OSM Handshake: Hide Sea", value=True, help="Uses OpenStreetMap data to mask out permanent water bodies.")
-brightness = st.sidebar.slider("Radar Gain", 0.5, 10.0, 3.0)
-selected_basemap = st.sidebar.selectbox("Base Map", ["OpenStreetMap", "Esri World Imagery", "CartoDB Positron"])
+st.sidebar.header("🗺️ Layers & Sync")
+sync_maps = st.sidebar.toggle("Sync Map Views", value=True)
+show_buildings = st.sidebar.toggle("Show Building Footprints", value=True)
+base_map = st.sidebar.selectbox("Base", ["OpenStreetMap", "Esri World Imagery"])
 
-btn_search = st.sidebar.button("🔍 FETCH RADAR DATA", type="primary", use_container_width=True)
+btn_run = st.sidebar.button("🚀 EXECUTE ANALYSIS", type="primary", use_container_width=True)
 
-# --- CORE SEARCH LOGIC ---
+# --- LOGIC ---
 if CLIENT_ID and CLIENT_SECRET:
     config = SHConfig(sh_client_id=CLIENT_ID, sh_client_secret=CLIENT_SECRET)
-
-    if btn_search:
-        lat, lon = (39.4699, -0.3763) # Default
-        if search_mode == "Search City":
-            try:
-                geolocator = Nominatim(user_agent=f"flood_explorer_{st.session_state.app_uuid_s1}")
-                time.sleep(1) 
-                location = geolocator.geocode(city_query, timeout=10)
-                if location: lat, lon = location.latitude, location.longitude
-            except: st.error("Geocoder busy.")
-
-        st.session_state.last_search_coords_s1 = (lat, lon, radius_km)
-        offset = (radius_km / 111.32) / 2
-        st.session_state.current_bounds_s1 = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
-        st.session_state.image_cache_s1 = {}
-        st.session_state.water_mask = None # Reset mask
+    
+    if btn_run:
+        lat, lon = (39.4699, -0.3763)
+        if search_mode == "City":
+            loc = Nominatim(user_agent="flood_pro").geocode(city_q)
+            if loc: lat, lon = loc.latitude, loc.longitude
         
-        catalog = SentinelHubCatalog(config=config)
-        bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
-        search = catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox_obj, time=(str(date_range[0]), str(date_range[1])))
+        st.session_state.last_search_coords_s1 = (lat, lon, radius)
+        off = (radius / 111.32) / 2
+        st.session_state.current_bounds_s1 = [[lat-off, lon-off], [lat+off, lon+off]]
+        
+        cat = SentinelHubCatalog(config=config)
+        bbox = BBox(bbox=[lon-off, lat-off, lon+off, lat+off], crs=CRS.WGS84)
+        search = cat.search(DataCollection.SENTINEL1_IW, bbox=bbox, time=(str(dates[0]), str(dates[1])))
         st.session_state.search_results_s1 = list(search)
+        st.session_state.image_cache_s1 = {}
 
-    # --- TABS ---
-    tab_dash, tab_ana, tab_flood = st.tabs(["🗺️ Dashboard", "🧪 Advanced Lab", "🚨 Flood Mapping"])
+    tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🧪 Advanced Lab", "🚨 Flood Impact"])
 
-    with tab_dash:
+    with tab1: # DASHBOARD
         if st.session_state.search_results_s1:
             res = st.session_state.search_results_s1
-            date_options = [f"{i}: {r['properties']['datetime'][:10]}" for i, r in enumerate(res)]
-            sel_dates = st.multiselect("Select dates:", date_options, default=date_options[:min(len(date_options), 2)])
-
-            if st.button("🖼️ RENDER RADAR", use_container_width=True):
-                lat, lon, r_km = st.session_state.last_search_coords_s1
-                offset = (r_km / 111.32) / 2
-                bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
-                evalscript = "//VERSION=3\nfunction setup(){return{input:['VV','VH'],output:{bands:2,sampleType:'FLOAT32'}};}function evaluatePixel(s){return[s.VV,s.VH];}"
+            opts = [f"{i}: {r['properties']['datetime'][:10]}" for i,r in enumerate(res)]
+            picks = st.multiselect("Render Dates:", opts, default=opts[:2])
+            
+            if st.button("Generate Viewers"):
+                off = (st.session_state.last_search_coords_s1[2] / 111.32) / 2
+                lat, lon, _ = st.session_state.last_search_coords_s1
+                bbox_obj = BBox(bbox=[lon-off, lat-off, lon+off, lat+off], crs=CRS.WGS84)
+                es = "//VERSION=3\nfunction setup(){return{input:['VV','VH'],output:{bands:2,sampleType:'FLOAT32'}};}function evaluatePixel(s){return[s.VV,s.VH];}"
                 
-                with st.spinner("Downloading and Masking..."):
-                    for d_str in sel_dates:
-                        actual_date = res[int(d_str.split(":")[0])]['properties']['datetime']
-                        req = SentinelHubRequest(evalscript=evalscript, input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(actual_date, actual_date))],
-                                                responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(500, 500), config=config)
-                        data = req.get_data()[0]
-                        st.session_state.image_cache_s1[actual_date] = data
-                        
-                        if st.session_state.water_mask is None:
-                            st.session_state.water_mask = fetch_osm_water_mask(lat, lon, r_km, data.shape[:2])
+                for p in picks:
+                    d = res[int(p.split(":")[0])]['properties']['datetime']
+                    req = SentinelHubRequest(evalscript=es, input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(d,d))],
+                                           responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(600, 600), config=config)
+                    st.session_state.image_cache_s1[d] = req.get_data()[0]
+                
+                # Handshake OSM for water/buildings
+                st.session_state.water_mask, st.session_state.building_gdf = fetch_osm_geometries(lat, lon, radius, (600,600))
 
             if st.session_state.image_cache_s1:
-                cols = st.columns(2)
-                for i, d_str in enumerate(sel_dates):
-                    actual_date = res[int(d_str.split(":")[0])]['properties']['datetime']
-                    if actual_date in st.session_state.image_cache_s1:
-                        with cols[i % 2]:
-                            data = st.session_state.image_cache_s1[actual_date].copy()
-                            
-                            # APPLY OSM MASK IF ENABLED
-                            if exclude_sea_osm and st.session_state.water_mask is not None:
-                                data[st.session_state.water_mask == 1] = 0
-                            
-                            pol = st.radio(f"View ({actual_date[:10]})", ["VV", "VH"], key=f"p_{i}", horizontal=True)
-                            channel = 0 if pol == "VV" else 1
-                            img = np.dstack([np.clip(data[:,:,channel]*brightness, 0, 1)]*3)
-                            
-                            m = folium.Map(location=[st.session_state.last_search_coords_s1[0], st.session_state.last_search_coords_s1[1]], zoom_start=12, tiles=selected_basemap)
-                            folium.raster_layers.ImageOverlay(image=get_image_url(img), bounds=st.session_state.current_bounds_s1).add_to(m)
-                            st_folium(m, height=350, width=None, key=f"map_{i}")
+                cols = st.columns(len(st.session_state.image_cache_s1))
+                for i, (dk, img_data) in enumerate(st.session_state.image_cache_s1.items()):
+                    with cols[i]:
+                        alpha = st.slider(f"Transparency {dk[:10]}", 0.0, 1.0, 0.8, key=f"a_{i}")
+                        gain = st.slider(f"Gain {dk[:10]}", 0.5, 10.0, 3.0, key=f"g_{i}")
+                        mode = st.radio(f"Pol {dk[:10]}", ["VV", "VH"], key=f"m_{i}", horizontal=True)
+                        
+                        ch = 0 if mode=="VV" else 1
+                        proc = np.dstack([np.clip(img_data[:,:,ch]*gain, 0, 1)]*3)
+                        m = folium.Map(location=[st.session_state.last_search_coords_s1[0], st.session_state.last_search_coords_s1[1]], zoom_start=13, tiles=base_map)
+                        folium.raster_layers.ImageOverlay(get_image_url(proc), bounds=st.session_state.current_bounds_s1, opacity=alpha).add_to(m)
+                        st_folium(m, height=400, key=f"map_dash_{i}")
 
-    with tab_ana:
-        if len(st.session_state.image_cache_s1) >= 2:
-            d_list = list(st.session_state.image_cache_s1.keys())
-            c_lab1, c_lab2, c_lab3 = st.columns([1,1,1])
-            lab_before = c_lab1.selectbox("Left (Baseline)", d_list, index=0)
-            lab_after = c_lab2.selectbox("Right (Crisis)", d_list, index=1)
-            cmap_choice = c_lab3.selectbox("Color Ramp", ["viridis", "magma", "inferno", "plasma"])
+    with tab2: # ADVANCED LAB
+        if st.session_state.image_cache_s1:
+            cmaps = ["viridis", "magma", "inferno", "plasma", "cividis", "Greys_r", "Blues", "YlGnBu", "winter", "coolwarm", "bwr", "tab20c", "brg", "binary", "gist_yarg", "gist_gray", "gray", "bone", "pink", "spring", "summer", "autumn", "winter", "cool", "Wistia", "hot", "afmhot", "gist_heat", "copper", "PiYG", "PRGn", "BrBG", "PuOr", "RdGy", "RdBu", "RdYlBu", "RdYlGn", "Spectral", "seismic", "twilight", "hsv", "Paired", "Accent", "Set1", "Set2", "tab10", "ocean", "terrain", "gnuplot", "jet", "turbo"]
+            c1, c2, c3 = st.columns(3)
+            date_l = c1.selectbox("Left Image", list(st.session_state.image_cache_s1.keys()), index=0)
+            date_r = c2.selectbox("Right Image", list(st.session_state.image_cache_s1.keys()), index=1)
+            cmap = c3.selectbox("Color Ramp", cmaps)
             
-            data_left = 10 * np.log10(st.session_state.image_cache_s1[lab_before][:,:,0] + 1e-10)
-            data_right = 10 * np.log10(st.session_state.image_cache_s1[lab_after][:,:,0] + 1e-10)
+            db_l = 10 * np.log10(st.session_state.image_cache_s1[date_l][:,:,0] + 1e-10)
+            db_r = 10 * np.log10(st.session_state.image_cache_s1[date_r][:,:,0] + 1e-10)
             
-            if exclude_sea_osm and st.session_state.water_mask is not None:
-                data_left[st.session_state.water_mask == 1] = np.nan
-                data_right[st.session_state.water_mask == 1] = np.nan
-
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-            ax1.imshow(data_left, cmap=cmap_choice, vmin=-25, vmax=-5); ax1.set_title("Before"); ax1.axis('off')
-            ax2.imshow(data_right, cmap=cmap_choice, vmin=-25, vmax=-5); ax2.set_title("After"); ax2.axis('off')
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+            ax1.imshow(db_l, cmap=cmap, vmin=-25, vmax=-5); ax1.set_title(f"Baseline: {date_l[:10]}"); ax1.axis('off')
+            ax2.imshow(db_r, cmap=cmap, vmin=-25, vmax=-5); ax2.set_title(f"Crisis: {date_r[:10]}"); ax2.axis('off')
             st.pyplot(fig)
-        else:
-            st.info("Render images in Dashboard first.")
+            
+            export_geotiff(db_l, "Left_dB.tif", *st.session_state.last_search_coords_s1, "exp_l")
+            export_geotiff(db_r, "Right_dB.tif", *st.session_state.last_search_coords_s1, "exp_r")
 
-    with tab_flood:
+    with tab3: # FLOOD IMPACT
         if len(st.session_state.image_cache_s1) >= 2:
-            d_list = list(st.session_state.image_cache_s1.keys())
-            before = st.selectbox("Select Dry Baseline", d_list, index=0, key="f_b")
-            after = st.selectbox("Select Wet Crisis", d_list, index=1, key="f_a")
+            st.subheader("🚨 Infrastructure Risk Assessment")
+            b_key = st.selectbox("Baseline (Dry)", list(st.session_state.image_cache_s1.keys()), 0)
+            a_key = st.selectbox("Crisis (Wet)", list(st.session_state.image_cache_s1.keys()), 1)
             
-            b_db = 10 * np.log10(st.session_state.image_cache_s1[before][:,:,0] + 1e-10)
-            a_db = 10 * np.log10(st.session_state.image_cache_s1[after][:,:,0] + 1e-10)
+            sens = st.slider("Flood Sensitivity (dB Change)", -15.0, -2.0, -6.0)
             
-            flood_mask = ((a_db - b_db) < st.slider("Flood Sensitivity", -15.0, -2.0, -6.0)).astype(float)
+            b_db = 10 * np.log10(st.session_state.image_cache_s1[b_key][:,:,0] + 1e-10)
+            a_db = 10 * np.log10(st.session_state.image_cache_s1[a_key][:,:,0] + 1e-10)
+            f_mask = ((a_db - b_db) < sens).astype(np.uint8)
+            f_mask[st.session_state.water_mask == 1] = 0 # Exclude permanent water
             
-            # THE OSM HANDSHAKE FINAL STEP: 
-            # If a pixel is in the sea, it cannot be "flooded land"
-            if exclude_sea_osm and st.session_state.water_mask is not None:
-                flood_mask[st.session_state.water_mask == 1] = 0
+            # --- SPATIAL JOIN: BUILDINGS VS FLOOD ---
+            impact_b = None
+            if st.session_state.building_gdf is not None:
+                # Convert mask to polygons for intersection
+                off = (st.session_state.last_search_coords_s1[2] / 111.32) / 2
+                lat, lon, _ = st.session_state.last_search_coords_s1
+                trans = from_bounds(lon-off, lat-off, lon+off, lat+off, 600, 600)
+                shps = features.shapes(f_mask, mask=(f_mask==1), transform=trans)
+                flood_polys = [shape(s) for s, v in shps]
+                
+                if flood_polys:
+                    impact_b = st.session_state.building_gdf[st.session_state.building_gdf.intersects(box(lon-off, lat-off, lon+off, lat+off))]
+                    # Just an example intersection check
+                    impact_b['is_flooded'] = impact_b.geometry.apply(lambda x: any(x.intersects(p) for p in flood_polys))
+                    affected = impact_b[impact_b['is_flooded'] == True]
+                    st.metric("Buildings at Risk", len(affected))
+            
+            # --- MAP ---
+            m_final = folium.Map(location=[lat, lon], zoom_start=14, tiles=base_map)
+            
+            # 1. Background
+            bg = np.dstack([np.clip(st.session_state.image_cache_s1[a_key][:,:,0]*3, 0, 1)]*3)
+            folium.raster_layers.ImageOverlay(get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.5).add_to(m_final)
+            
+            # 2. Flood Overlay
+            f_rgb = np.zeros((600,600,4))
+            f_rgb[f_mask==1] = [0.1, 0.4, 0.9, 0.7] # Blue flood
+            folium.raster_layers.ImageOverlay(get_image_url(f_rgb), bounds=st.session_state.current_bounds_s1).add_to(m_final)
+            
+            # 3. Buildings Overlay
+            if show_buildings and impact_b is not None:
+                folium.GeoJson(impact_b, style_function=lambda x: {'color': 'red' if x['properties'].get('is_flooded') else 'green', 'weight': 1, 'fillOpacity': 0.5}).add_to(m_final)
 
-            m_f = folium.Map(location=[st.session_state.last_search_coords_s1[0], st.session_state.last_search_coords_s1[1]], zoom_start=12, tiles=selected_basemap)
+            st_folium(m_final, height=600, width=1200)
             
-            # After Image Background
-            bg_data = st.session_state.image_cache_s1[after][:,:,0].copy()
-            if exclude_sea_osm and st.session_state.water_mask is not None: bg_data[st.session_state.water_mask == 1] = 0
-            bg = np.dstack([np.clip(bg_data*brightness, 0, 1)]*3)
-            folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.4).add_to(m_f)
-            
-            # Red Flood Overlay
-            mask_rgb = np.zeros((*flood_mask.shape, 4))
-            mask_rgb[flood_mask == 1] = [1, 0, 0, 0.8]
-            folium.raster_layers.ImageOverlay(image=get_image_url(mask_rgb), bounds=st.session_state.current_bounds_s1).add_to(m_f)
-            
-            st_folium(m_f, height=500, width=None, key="f_map_final")
+            # --- DOWNLOADS ---
+            c1, c2 = st.columns(2)
+            with c1:
+                export_geotiff(f_mask, "flood_mask.tif", *st.session_state.last_search_coords_s1, "dl_f_mask")
+            with c2:
+                if impact_b is not None:
+                    st.download_button("📐 Download Impacted Buildings (GeoJSON)", impact_b.to_json(), "buildings_at_risk.geojson")
 else:
-    st.info("Enter Credentials to begin.")
+    st.info("Provide credentials to unlock full intelligence suite.")
