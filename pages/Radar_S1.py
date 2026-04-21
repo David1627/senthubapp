@@ -195,7 +195,7 @@ if CLIENT_ID and CLIENT_SECRET:
             c1, c2, c3 = st.columns(3)
             before = c1.selectbox("Baseline (Dry)", d_list, index=0, key="f1")
             after = c2.selectbox("Crisis (Wet)", d_list, index=1, key="f2")
-            f_color = c3.color_picker("Flood Overlay Color", "#0d90ffd9")
+            f_color = c3.color_picker("Flood Overlay Color",  "#FF0000")
 
             b_db = 10 * np.log10(st.session_state.image_cache_s1[before][:,:,0] + 1e-10)
             a_db = 10 * np.log10(st.session_state.image_cache_s1[after][:,:,0] + 1e-10)
