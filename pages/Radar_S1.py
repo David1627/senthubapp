@@ -149,7 +149,7 @@ if CLIENT_ID and CLIENT_SECRET:
             c_lab1, c_lab2, c_lab3 = st.columns([1,1,1])
             lab_before = c_lab1.selectbox("Plot Left (Baseline)", d_list, index=0)
             lab_after = c_lab2.selectbox("Plot Right (Crisis)", d_list, index=1)
-            cmap_choice = c_lab3.selectbox("Color Ramp", ["viridis", "magma", "inferno", "plasma", "cividis", "Greys_r", "Blues", "YlGnBu", "winter", 'coolwarm', 'bwr', 'tab20c', 'brg','binary', 'gist_yarg', 'gist_gray', 'gray', 'bone','pink', 'spring', 'summer', 'autumn', 'winter', 'cool',
+            cmap_choice = c_lab3.selectbox("Color Ramp", ["viridis", "magma", "inferno", "plasma", "cividis", "Greys_r", "Blues", "YlGnBu", "winter", 'coolwarm', 'bwr', 'tab20c', 'brg', 'binary', 'gist_yarg', 'gist_gray', 'gray', 'bone','pink', 'spring', 'summer', 'autumn', 'winter', 'cool',
                       'Wistia', 'hot', 'afmhot', 'gist_heat', 'copper', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu',
                       'RdYlGn', 'Spectral', 'coolwarm', 'bwr', 'seismic', 'twilight', 'twilight_shifted', 'hsv', 'Pastel1', 'Pastel2', 'Paired', 'Accent', 'Dark2',
                       'Set1', 'Set2', 'Set3', 'tab10', 'tab20', 'tab20b',
@@ -195,7 +195,7 @@ if CLIENT_ID and CLIENT_SECRET:
             c1, c2, c3 = st.columns(3)
             before = c1.selectbox("Baseline (Dry)", d_list, index=0, key="f1")
             after = c2.selectbox("Crisis (Wet)", d_list, index=1, key="f2")
-            f_color = c3.color_picker("Flood Overlay Color", "#FF0000")
+            f_color = c3.color_picker("Flood Overlay Color", "#0003FF")
 
             b_db = 10 * np.log10(st.session_state.image_cache_s1[before][:,:,0] + 1e-10)
             a_db = 10 * np.log10(st.session_state.image_cache_s1[after][:,:,0] + 1e-10)
@@ -211,7 +211,7 @@ if CLIENT_ID and CLIENT_SECRET:
             with col_m:
                 m_f = folium.Map(location=[st.session_state.last_search_coords_s1[0], st.session_state.last_search_coords_s1[1]], zoom_start=12, tiles=selected_basemap)
                 bg = np.dstack([np.clip(st.session_state.image_cache_s1[after][:,:,0]*brightness, 0, 1)]*3)
-                folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.4).add_to(m_f)
+                folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.9).add_to(m_f)
                 h = f_color.lstrip('#'); rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
                 mask_rgb = np.zeros((*flood_mask.shape, 4))
                 mask_rgb[flood_mask == 1] = [*rgb, 0.8]
