@@ -167,7 +167,7 @@ if CLIENT_ID and CLIENT_SECRET:
             ax2.set_title(f"RIGHT: {lab_after[:10]} (dB)")
             ax2.axis('off')
             
-            fig.colorbar(im2, ax=[ax1, ax2], label="Backscatter Intensity (dB)", orientation='horizontal', pad=0.9)
+            fig.colorbar(im2, ax=[ax1, ax2], label="Backscatter Intensity (dB)", orientation='horizontal', pad=0.09)
             st.pyplot(fig)
             
             # --- HISTOGRAM SECTION ---
