@@ -57,7 +57,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("2. Search Area")
 city_name = st.sidebar.text_input("City Name", "Input City, Input Country")
 radius_km = st.sidebar.slider("Radius (km)", 1, 60, 10)
-date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2026, 101 1), datetime.date(2026, 03, 01)))
+date_range = st.sidebar.date_input("Date Range", value=(datetime.date(2026, 01, 1), datetime.date(2026, 03, 01)))
 
 with st.sidebar.expander("📍 Manual Coords"):
     man_lat = st.number_input("Lat", value=39.02743928102668, format="%.4f")
