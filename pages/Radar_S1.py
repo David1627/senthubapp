@@ -200,6 +200,6 @@ if CLIENT_ID and CLIENT_SECRET:
                 mask_rgb[flood_mask == 1] = [*rgb, 0.8] # Color + Alpha
                 folium.raster_layers.ImageOverlay(image=get_image_url(mask_rgb), bounds=st.session_state.current_bounds_s1).add_to(m_flood)
                 
-                st_folium(m_flood, height=500, width=700, key="flood_map_final")
+                st_folium(m_flood, height=800, width=950, key="flood_map_final")
 else:
     st.info("👋 Welcome! Please enter your Sentinel Hub credentials in the sidebar to fetch Radar data.")
