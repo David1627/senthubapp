@@ -8,7 +8,7 @@ folium
 rasterio
 tifffile
 pandas
-pillow
+Pillow
 osmnx
 base64
 datetime
