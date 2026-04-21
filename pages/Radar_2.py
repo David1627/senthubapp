@@ -211,7 +211,7 @@ if CLIENT_ID and CLIENT_SECRET:
             off = (st.session_state.radius / 111.32) / 2
             bounds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
             
-            folium.raster_layers.ImageOverlay(get_image_url(bg), bounds=bounds, opacity=0.4).add_to(m_f)
+            folium.raster_layers.ImageOverlay(get_image_url(bg), bounds=bounds, opacity=0.9).add_to(m_f)
             
             # Flood layer (Red)
             f_rgb = np.zeros((600,600,4))
