@@ -10,3 +10,6 @@ tifffile
 pandas
 pillow
 osmnx
+base64
+datetime
+io
