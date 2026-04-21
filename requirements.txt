@@ -13,3 +13,5 @@ osmnx
 base64
 datetime
 io
+shapely
+pyproj
