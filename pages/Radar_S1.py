@@ -115,7 +115,7 @@ if CLIENT_ID and CLIENT_SECRET:
                 for d_str in sel_dates:
                     actual_date = res[int(d_str.split(":")[0])]['properties']['datetime']
                     req = SentinelHubRequest(evalscript=evalscript, input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(actual_date, actual_date))],
-                                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(600, 600), config=config)
+                                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox_obj, size=(600, 900), config=config)
                     st.session_state.image_cache_s1[actual_date] = req.get_data()[0]
 
             if st.session_state.image_cache_s1:
