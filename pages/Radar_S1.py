@@ -28,7 +28,6 @@ if 'image_cache_s1' not in st.session_state: st.session_state.image_cache_s1 = {
 if 'app_uuid_s1' not in st.session_state: st.session_state.app_uuid_s1 = str(uuid.uuid4())
 if 'last_search_coords_s1' not in st.session_state: st.session_state.last_search_coords_s1 = None
 if 'current_bounds_s1' not in st.session_state: st.session_state.current_bounds_s1 = None
-# Set defaults to None (Null)
 if 'lat' not in st.session_state: st.session_state.lat = None
 if 'lon' not in st.session_state: st.session_state.lon = None
 
@@ -62,16 +61,14 @@ st.sidebar.header("2. Search Area")
 search_mode = st.sidebar.radio("Location Mode:", ["Search City", "Manual Coordinates"])
 
 if search_mode == "Search City":
-    # Null default value for City
     city_query = st.sidebar.text_input("City Name", value="", placeholder="e.g. Valencia, Spain")
 else:
-    # Null/Empty defaults for Coords
     st.session_state.lat = st.sidebar.number_input("Lat", value=None, format="%.6f", placeholder="0.0000")
     st.session_state.lon = st.sidebar.number_input("Lon", value=None, format="%.6f", placeholder="0.0000")
 
 radius_km = st.sidebar.slider("Radius (km)", 1, 50, 10)
 
-# Set date range to current relative time
+# Default to current relative time
 today = datetime.date.today()
 start_default = today - datetime.timedelta(days=14)
 date_range = st.sidebar.date_input("Date Window", value=(start_default, today))
@@ -100,11 +97,9 @@ if CLIENT_ID and CLIENT_SECRET:
                         st.error("City not found.")
                 except: st.error("Geocoder busy.")
 
-        # Ensure we have coordinates before proceeding
         if st.session_state.lat is not None and st.session_state.lon is not None:
             lat, lon = st.session_state.lat, st.session_state.lon
             st.session_state.last_search_coords_s1 = (lat, lon, radius_km)
-            
             offset = (radius_km / 111.32) / 2
             st.session_state.current_bounds_s1 = [[lat - offset, lon - offset], [lat + offset, lon + offset]]
             st.session_state.image_cache_s1 = {} 
@@ -113,8 +108,6 @@ if CLIENT_ID and CLIENT_SECRET:
             bbox_obj = BBox(bbox=[lon-offset, lat-offset, lon+offset, lat+offset], crs=CRS.WGS84)
             search = catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox_obj, time=(str(date_range[0]), str(date_range[1])))
             st.session_state.search_results_s1 = list(search)
-        else:
-            st.error("Coordinates are missing. Please provide a city or manual Lat/Lon.")
 
     # --- TABS ---
     tab_dash, tab_ana, tab_flood = st.tabs(["🗺️ Dashboard", "🧪 Advanced Lab", "🚨 Flood Mapping"])
@@ -156,6 +149,36 @@ if CLIENT_ID and CLIENT_SECRET:
         else:
             st.info("Input a location and click Fetch Radar Data to see results.")
 
+    # --- RESTORED MIDDLE TAB (ADVANCED LAB) ---
+    with tab_ana:
+        if len(st.session_state.image_cache_s1) >= 2:
+            st.subheader("🧪 Radar Backscatter Lab: Side-by-Side Analysis")
+            d_list = list(st.session_state.image_cache_s1.keys())
+            
+            c_lab1, c_lab2, c_lab3 = st.columns([1,1,1])
+            lab_before = c_lab1.selectbox("Plot Left (Baseline)", d_list, index=0)
+            lab_after = c_lab2.selectbox("Plot Right (Crisis)", d_list, index=1)
+            cmap_choice = c_lab3.selectbox("Color Ramp", ["viridis", "magma", "inferno", "Greys_r"])
+            
+            db_min, db_max = st.slider("Intensity Range (dB)", -35, 5, (-25, -5))
+
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+            data_left = 10 * np.log10(st.session_state.image_cache_s1[lab_before][:,:,0] + 1e-10)
+            data_right = 10 * np.log10(st.session_state.image_cache_s1[lab_after][:,:,0] + 1e-10)
+            
+            im1 = ax1.imshow(data_left, cmap=cmap_choice, vmin=db_min, vmax=db_max)
+            ax1.set_title(f"Baseline: {lab_before[:10]}")
+            ax1.axis('off')
+            
+            im2 = ax2.imshow(data_right, cmap=cmap_choice, vmin=db_min, vmax=db_max)
+            ax2.set_title(f"Crisis: {lab_after[:10]}")
+            ax2.axis('off')
+            
+            fig.colorbar(im2, ax=[ax1, ax2], label="dB Intensity", orientation='horizontal', pad=0.1)
+            st.pyplot(fig)
+        else:
+            st.info("💡 Load at least two images in the Dashboard to use the Lab.")
+
     with tab_flood:
         if len(st.session_state.image_cache_s1) >= 2:
             d_list = list(st.session_state.image_cache_s1.keys())
@@ -184,6 +207,11 @@ if CLIENT_ID and CLIENT_SECRET:
                 folium.raster_layers.ImageOverlay(image=get_image_url(bg), bounds=st.session_state.current_bounds_s1, opacity=0.3).add_to(m_f)
                 folium.raster_layers.ImageOverlay(image=get_image_url(mask_rgba), bounds=st.session_state.current_bounds_s1).add_to(m_f)
                 st_folium(m_f, height=500, width=None, key="f_map")
+            
+            with col_exp:
+                st.write("### 📂 Export")
+                if st.session_state.last_search_coords_s1:
+                    create_geotiff_download(flood_mask, "flood_analysis.tif", *st.session_state.last_search_coords_s1, key="dl_t")
         else:
             st.info("💡 Load data in the Dashboard to begin flood analysis.")
 else:
