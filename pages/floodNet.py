@@ -204,16 +204,18 @@ if CLIENT_ID and CLIENT_SECRET:
         if len(st.session_state.image_cache_s1) >= 2 and st.session_state.last_search_coords_s1:
             st.subheader("🏠 Building Parcel Impact Analysis (Live OSM)")
             lat, lon, r_km = st.session_state.last_search_coords_s1
-            
             with st.spinner("Acquiring building data from OpenStreetMap..."):
                 try:
                     local_path = "data/buildings/parcels.geojson"
                     if os.path.exists(local_path):
                         buildings_gdf = gpd.read_file(local_path)
                     else:
-                        buildings_gdf = ox.geometries_from_point((lat, lon), tags={'building': True}, dist=r_km * 1000)
+                        # Updated function name for OSMnx 1.6.0+
+                        buildings_gdf = ox.features_from_point((lat, lon), tags={'building': True}, dist=r_km * 1000)
+                        
+                        # Filter for polygons only
                         buildings_gdf = buildings_gdf[buildings_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
-
+            
                     if buildings_gdf.crs is None: buildings_gdf.set_crs("EPSG:4326", inplace=True)
                     buildings_gdf = buildings_gdf.to_crs("EPSG:4326")
 
