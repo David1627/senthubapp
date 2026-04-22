@@ -1,5 +1,6 @@
 Optical Sentinel=2 APP
-[Detect Flood and Save Flooded Areas](https://radarflood.streamlit.app/)
+
+[Check Sentinel-2 images](https://sentappapp-dmquuw6bzv4lqguywuzwvr.streamlit.app/)
 
 
 
@@ -68,4 +69,4 @@ The Analysis Lab utilizes the following formulas to transform raw satellite data
 
 RADAR Sentinel-1 APP
 
-[Try the App 2](https://sentrad-flood.streamlit.app/)
+[Detect Flood and Save Flooded Areas](https://radarflood.streamlit.app/)
