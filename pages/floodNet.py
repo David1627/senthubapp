@@ -72,9 +72,23 @@ st.sidebar.markdown("---")
 st.sidebar.header("2. Search Area")
 search_mode = st.sidebar.radio("Location Mode:", ["Search City", "Manual Coordinates"])
 
-# FIX: Removed "Valencia" default
-city_query = st.sidebar.text_input("City Name", value="", placeholder="Enter City (e.g. London)") if search_mode == "Search City" else None
+# --- SIDEBAR ---
+st.sidebar.header("1. Credentials")
+CLIENT_ID = st.sidebar.text_input("Client ID", type="password")
+CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
+
+st.sidebar.markdown("---")
+st.sidebar.header("2. Search Area")
+search_mode = st.sidebar.radio("Location Mode:", ["Search City", "Manual Coordinates"])
+
+if search_mode == "Search City":
+    city_query = st.sidebar.text_input("City Name", value="", placeholder="e.g. Valencia, Spain")
+else:
+    st.session_state.lat = st.sidebar.number_input("Lat", value=None, format="%.6f", placeholder="0.0000")
+    st.session_state.lon = st.sidebar.number_input("Lon", value=None, format="%.6f", placeholder="0.0000")
+
 radius_km = st.sidebar.slider("Radius (km)", 1, 50, 10)
+
 
 # FIX: Set dates to be dynamic (Today +/- 14 days)
 today = datetime.date.today()
