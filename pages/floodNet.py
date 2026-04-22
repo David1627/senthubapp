@@ -196,87 +196,87 @@ if CLIENT_ID and CLIENT_SECRET:
             create_geotiff_download(flood_mask, "flood.tif", *st.session_state.last_search_coords_s1, key="dl_t")
             create_geojson_download(flood_mask, *st.session_state.last_search_coords_s1)
 
-with tab_impact:
-    if len(st.session_state.image_cache_s1) >= 2 and st.session_state.last_search_coords_s1:
-        st.subheader("🏠 Building Parcel Impact Analysis (Live OSM)")
-        
-        # 1. Get Coordinates from Session State
-        lat, lon, r_km = st.session_state.last_search_coords_s1
-        
-        with st.spinner("Acquiring building data..."):
-            try:
-                # STRATEGY: Try local file first, then fallback to live OSM query
-                local_path = "data/buildings/parcels.geojson"
-                if os.path.exists(local_path):
-                    buildings_gdf = gpd.read_file(local_path)
-                    st.caption("Using local building data.")
-                else:
-                    # Fetching from OSM based on search radius
-                    # We use tags={'building': True} to get all parcel footprints
-                    buildings_gdf = ox.geometries_from_point((lat, lon), tags={'building': True}, dist=radius_km * 1000)
-                    # Clean up: OSMNX often returns points/lines too; we only want Polygons
-                    buildings_gdf = buildings_gdf[buildings_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
-                    st.caption("Using live OpenStreetMap data.")
-
-                if buildings_gdf.crs is None: 
-                    buildings_gdf.set_crs("EPSG:4326", inplace=True)
-                buildings_gdf = buildings_gdf.to_crs("EPSG:4326")
-
-                # 2. Re-calculate Flood Mask
-                # (Using the sensitivity slider from the Flood Mapping tab)
-                b_db = 10 * np.log10(st.session_state.image_cache_s1[before][:,:,0] + 1e-10)
-                a_db = 10 * np.log10(st.session_state.image_cache_s1[after][:,:,0] + 1e-10)
-                f_mask = ((a_db - b_db) < st.session_state.flood_sens).astype(np.uint8)
-                
-                off = (r_km / 111.32) / 2
-                trans = from_bounds(lon-off, lat-off, lon+off, lat+off, f_mask.shape[1], f_mask.shape[0])
-                flood_shapes = features.shapes(f_mask, mask=(f_mask > 0), transform=trans)
-                flood_polys = [shape(geom) for geom, val in flood_shapes]
-                
-                if flood_polys:
-                    flood_gdf = gpd.GeoDataFrame({'geometry': flood_polys}, crs="EPSG:4326")
-                    
-                    # 3. Spatial Join to find Affected Parcels
-                    # We use 'intersects' so if any part of the building is in water, it turns red
-                    affected_buildings = gpd.sjoin(buildings_gdf, flood_gdf, how='inner', predicate='intersects')
-
-                    # 4. Visualization
-                    m_imp = folium.Map(location=[lat, lon], zoom_start=15, tiles=selected_basemap)
-                    
-                    # Background: All Buildings (Gray)
-                    folium.GeoJson(
-                        buildings_gdf,
-                        name="Safe Buildings",
-                        style_function=lambda x: {
-                            'fillColor': '#808080', 
-                            'color': '#505050', 
-                            'weight': 0.5, 
-                            'fillOpacity': 0.3
-                        }
-                    ).add_to(m_imp)
-                    
-                    # Overlay: Affected Buildings (Red)
-                    if not affected_buildings.empty:
-                        folium.GeoJson(
-                            affected_buildings,
-                            name="Flooded Buildings",
-                            style_function=lambda x: {
-                                'fillColor': '#FF0000', 
-                                'color': '#8B0000', 
-                                'weight': 1, 
-                                'fillOpacity': 0.7
-                            }
-                        ).add_to(m_imp)
-                        
-                        st.error(f"🚨 Impact Detected: {len(affected_buildings)} building parcels intersect with the flood zone.")
-                    else:
-                        st.success("✅ No building impacts detected in this area.")
-
-                    st_folium(m_imp, height=600, width=None, key="osm_building_map")
-                else:
-                    st.info("No flood polygons detected. Adjust 'Sensitivity' in the Flood Mapping tab.")
-
-            except Exception as e:
-                st.error(f"Failed to acquire building data: {e}")
+  with tab_impact:
+      if len(st.session_state.image_cache_s1) >= 2 and st.session_state.last_search_coords_s1:
+          st.subheader("🏠 Building Parcel Impact Analysis (Live OSM)")
+          
+          # 1. Get Coordinates from Session State
+          lat, lon, r_km = st.session_state.last_search_coords_s1
+          
+          with st.spinner("Acquiring building data..."):
+              try:
+                  # STRATEGY: Try local file first, then fallback to live OSM query
+                  local_path = "data/buildings/parcels.geojson"
+                  if os.path.exists(local_path):
+                      buildings_gdf = gpd.read_file(local_path)
+                      st.caption("Using local building data.")
+                  else:
+                      # Fetching from OSM based on search radius
+                      # We use tags={'building': True} to get all parcel footprints
+                      buildings_gdf = ox.geometries_from_point((lat, lon), tags={'building': True}, dist=radius_km * 1000)
+                      # Clean up: OSMNX often returns points/lines too; we only want Polygons
+                      buildings_gdf = buildings_gdf[buildings_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
+                      st.caption("Using live OpenStreetMap data.")
+  
+                  if buildings_gdf.crs is None: 
+                      buildings_gdf.set_crs("EPSG:4326", inplace=True)
+                  buildings_gdf = buildings_gdf.to_crs("EPSG:4326")
+  
+                  # 2. Re-calculate Flood Mask
+                  # (Using the sensitivity slider from the Flood Mapping tab)
+                  b_db = 10 * np.log10(st.session_state.image_cache_s1[before][:,:,0] + 1e-10)
+                  a_db = 10 * np.log10(st.session_state.image_cache_s1[after][:,:,0] + 1e-10)
+                  f_mask = ((a_db - b_db) < st.session_state.flood_sens).astype(np.uint8)
+                  
+                  off = (r_km / 111.32) / 2
+                  trans = from_bounds(lon-off, lat-off, lon+off, lat+off, f_mask.shape[1], f_mask.shape[0])
+                  flood_shapes = features.shapes(f_mask, mask=(f_mask > 0), transform=trans)
+                  flood_polys = [shape(geom) for geom, val in flood_shapes]
+                  
+                  if flood_polys:
+                      flood_gdf = gpd.GeoDataFrame({'geometry': flood_polys}, crs="EPSG:4326")
+                      
+                      # 3. Spatial Join to find Affected Parcels
+                      # We use 'intersects' so if any part of the building is in water, it turns red
+                      affected_buildings = gpd.sjoin(buildings_gdf, flood_gdf, how='inner', predicate='intersects')
+  
+                      # 4. Visualization
+                      m_imp = folium.Map(location=[lat, lon], zoom_start=15, tiles=selected_basemap)
+                      
+                      # Background: All Buildings (Gray)
+                      folium.GeoJson(
+                          buildings_gdf,
+                          name="Safe Buildings",
+                          style_function=lambda x: {
+                              'fillColor': '#808080', 
+                              'color': '#505050', 
+                              'weight': 0.5, 
+                              'fillOpacity': 0.3
+                          }
+                      ).add_to(m_imp)
+                      
+                      # Overlay: Affected Buildings (Red)
+                      if not affected_buildings.empty:
+                          folium.GeoJson(
+                              affected_buildings,
+                              name="Flooded Buildings",
+                              style_function=lambda x: {
+                                  'fillColor': '#FF0000', 
+                                  'color': '#8B0000', 
+                                  'weight': 1, 
+                                  'fillOpacity': 0.7
+                              }
+                          ).add_to(m_imp)
+                          
+                          st.error(f"🚨 Impact Detected: {len(affected_buildings)} building parcels intersect with the flood zone.")
+                      else:
+                          st.success("✅ No building impacts detected in this area.")
+  
+                      st_folium(m_imp, height=600, width=None, key="osm_building_map")
+                  else:
+                      st.info("No flood polygons detected. Adjust 'Sensitivity' in the Flood Mapping tab.")
+  
+              except Exception as e:
+                  st.error(f"Failed to acquire building data: {e}")
 else:
     st.info("👋 Enter credentials to begin.")
