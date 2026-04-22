@@ -197,34 +197,73 @@ if CLIENT_ID and CLIENT_SECRET:
 
     with tab_impact:
         if len(st.session_state.image_cache_s1) >= 2 and st.session_state.last_search_coords_s1:
-            st.subheader("🛣️ Road Network Impact Analysis")
+            st.subheader("🏠 Building Impact Analysis")
+            
             try:
-                roads_gdf = gpd.read_file("data/networks/roads.geojson")
-                if roads_gdf.crs is None: roads_gdf.set_crs("EPSG:4326", inplace=True)
+                # 1. Load Building Parcels (Ensure you have this file or use osmnx to fetch)
+                # If you use OSMnx: buildings_gdf = ox.geometries_from_point((lat, lon), tags={'building': True}, dist=radius_km*1000)
+                buildings_gdf = gpd.read_file("data/buildings/parcels.geojson")
+                if buildings_gdf.crs is None: buildings_gdf.set_crs("EPSG:4326", inplace=True)
                 
+                # 2. Re-generate the Flood Mask Polygons
                 b_db = 10 * np.log10(st.session_state.image_cache_s1[before][:,:,0] + 1e-10)
                 a_db = 10 * np.log10(st.session_state.image_cache_s1[after][:,:,0] + 1e-10)
+                # Use the sensitivity slider value from the session state
                 f_mask = ((a_db - b_db) < st.session_state.flood_sens).astype(np.uint8)
                 
                 lat, lon, r_km = st.session_state.last_search_coords_s1
                 off = (r_km / 111.32) / 2
-                trans = from_bounds(lon-off, lat-off, lon+off, lat+off, f_mask.shape[1], f_mask.shape[0])
+                trans = from_bounds(lon-off, lat-off, lon+off, lat+offset, f_mask.shape[1], f_mask.shape[0])
+                
                 flood_shapes = features.shapes(f_mask, mask=(f_mask > 0), transform=trans)
                 flood_polys = [shape(geom) for geom, val in flood_shapes]
                 
                 if flood_polys:
                     flood_gdf = gpd.GeoDataFrame({'geometry': flood_polys}, crs="EPSG:4326")
-                    affected_roads = gpd.overlay(roads_gdf, flood_gdf, how='intersection')
-                    m_imp = folium.Map(location=[lat, lon], zoom_start=13, tiles=selected_basemap)
-                    folium.GeoJson(roads_gdf, name="Safe Roads", style_function=lambda x: {'color': 'gray', 'weight': 1, 'opacity': 0.3}).add_to(m_imp)
-                    if not affected_roads.empty:
-                        folium.GeoJson(affected_roads, name="Flooded Segments", style_function=lambda x: {'color': 'red', 'weight': 5}).add_to(m_imp)
-                        st.warning(f"🚨 Identified {len(affected_roads)} affected road segments.")
-                    st_folium(m_imp, height=500, width=None, key="impact_map_viewer")
+                    
+                    # 3. SPATIAL JOIN (Check which buildings are touched by flood)
+                    # We use sjoin (Spatial Join) because it's faster for entire polygons than 'intersection'
+                    affected_buildings = gpd.sjoin(buildings_gdf, flood_gdf, predicate='intersects')
+                    
+                    # 4. Map Visualization
+                    m_imp = folium.Map(location=[lat, lon], zoom_start=14, tiles=selected_basemap)
+                    
+                    # Style for Gray (Safe) Buildings
+                    folium.GeoJson(
+                        buildings_gdf, 
+                        name="All Buildings",
+                        style_function=lambda x: {
+                            'fillColor': 'gray', 
+                            'color': 'gray', 
+                            'weight': 0.5, 
+                            'fillOpacity': 0.2
+                        }
+                    ).add_to(m_imp)
+                    
+                    # Style for Red (Affected) Buildings
+                    if not affected_buildings.empty:
+                        folium.GeoJson(
+                            affected_buildings, 
+                            name="Flooded Buildings",
+                            style_function=lambda x: {
+                                'fillColor': 'red', 
+                                'color': 'darkred', 
+                                'weight': 1, 
+                                'fillOpacity': 0.7
+                            }
+                        ).add_to(m_imp)
+                        
+                        st.error(f"🚨 ALERT: {len(affected_buildings)} building parcels detected within the flooded zone.")
+                    else:
+                        st.success("✅ No buildings detected within the current flood mask.")
+                        
+                    st_folium(m_imp, height=600, width=None, key="building_impact_viewer")
+                else:
+                    st.info("No significant flood detected to perform building analysis.")
+                    
             except Exception as e:
-                st.info(f"Please ensure 'data/networks/roads.geojson' is available. Error: {e}")
+                st.warning(f"Building data not found. To use this, add a GeoJSON of parcels to your data folder. Error: {e}")
         else:
-            st.info("💡 Fetch data and perform Flood Mapping first.")
-
+            st.info("💡 Please fetch radar data and complete the 'Flood Mapping' tab first.")
 else:
     st.info("👋 Enter credentials to begin.")
