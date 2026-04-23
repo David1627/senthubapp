@@ -165,7 +165,7 @@ if CLIENT_ID and CLIENT_SECRET:
             c_lab1, c_lab2, c_lab3 = st.columns(3)
             lab_before = c_lab1.selectbox("Baseline", d_list, index=0)
             lab_after = c_lab2.selectbox("Crisis", d_list, index=1)
-            cmap_choice = c_lab3.selectbox("CMap", ['Accent','Accent_r','Blues','Blues_r','BrBG','BrBG_r','BuGn','BuGn_r','BuPu','BuPu_r','CMRmap'])
+            cmap_choice = c_lab3.selectbox("CMap", ["viridis", "magma", "Greys_r", "bone"])
             db_min, db_max = st.slider("Range (dB)", -35, 5, (-25, -5))
             
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
