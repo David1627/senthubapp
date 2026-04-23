@@ -13,19 +13,31 @@ import json
 from io import BytesIO
 from PIL import Image
 import uuid
-import rasterio
 from rasterio import features
 from rasterio.transform import from_bounds
 from rasterio.io import MemoryFile
 
-# --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="S1 Radar Master Pro", page_icon="📡")
+# --- CONFIG & THEME ---
+st.set_page_config(layout="wide", page_title="S1 Radar Command Center", page_icon="📡")
 
-# --- INITIALIZE SESSION STATE ---
-if 'image_cache' not in st.session_state: st.session_state.image_cache = {}
-if 'search_results' not in st.session_state: st.session_state.search_results = None
+# Custom CSS for the "Dashboard" look
+st.markdown("""
+    <style>
+    [data-testid="stMetricValue"] { font-size: 1.8rem; color: #00FFFF; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] { background-color: #1e1e1e; border-radius: 4px 4px 0 0; padding: 10px; }
+    .main { background-color: #0e1117; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- SESSION STATE ---
+for key in ['image_cache', 'search_results', 'lat', 'lon']:
+    if key not in st.session_state:
+        if key == 'lat': st.session_state[key] = 42.041
+        elif key == 'lon': st.session_state[key] = 3.126
+        else: st.session_state[key] = {} if key == 'image_cache' else None
+
 if 'app_uuid' not in st.session_state: st.session_state.app_uuid = str(uuid.uuid4())[:8]
-if 'lat' not in st.session_state: st.session_state.lat, st.session_state.lon = 42.041, 3.126
 
 # --- HELPERS ---
 def get_img_url(np_img):
@@ -34,7 +46,7 @@ def get_img_url(np_img):
     Image.fromarray(img_data).save(buffered, format="PNG")
     return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
 
-def create_geotiff_download(data, filename, lat, lon, r_km, key, label="📥"):
+def create_geotiff_download(data, filename, lat, lon, r_km, key, label="📥 TIFF"):
     off = (r_km / 111.32) / 2
     if len(data.shape) == 3: data = data[:,:,0]
     tf = from_bounds(lon-off, lat-off, lon+off, lat+off, data.shape[1], data.shape[0])
@@ -42,27 +54,33 @@ def create_geotiff_download(data, filename, lat, lon, r_km, key, label="📥"):
         with mem.open(driver='GTiff', height=data.shape[0], width=data.shape[1], count=1,
                       dtype='float32', crs='EPSG:4326', transform=tf) as ds:
             ds.write(data.astype('float32'), 1)
-        return st.download_button(label, mem.read(), filename, "image/tiff", key=key, use_container_width=True)
+        return st.download_button(label, mem.read(), filename, "image/tiff", key=key)
 
-# --- SIDEBAR ---
-st.sidebar.title("🌊 Radar Master Pro")
-CLIENT_ID = st.sidebar.text_input("Client ID", type="password")
-CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
+# --- HEADER ---
+st.markdown("<h2 style='text-align: center; color: #00FFFF; margin-bottom: 20px;'>📡 S1 RADAR ANALYTICS COMMAND CENTER</h2>", unsafe_allow_html=True)
 
-with st.sidebar.expander("📍 Configuration", expanded=True):
-    city = st.text_input("City Search", "Torroella de Montgrí, Spain")
-    r_km = st.slider("Radius (km)", 1, 30, 8)
-    center_map = st.checkbox("Lock View to Center", value=True)
-    gain = st.slider("Radar Gain", 0.5, 10.0, 3.0)
-    search_win = st.date_input("Archive Window", [datetime.date.today() - datetime.timedelta(days=90), datetime.date.today()])
+# --- SIDEBAR CONTROLS ---
+with st.sidebar:
+    st.title("🛰️ System Controls")
+    cid = st.text_input("Client ID", type="password")
+    sec = st.text_input("Client Secret", type="password")
+    
+    with st.expander("🌍 AOI Settings", expanded=True):
+        city = st.text_input("Target Location", "Torroella de Montgrí")
+        r_km = st.slider("Radius (km)", 1, 20, 8)
+        gain = st.slider("Signal Gain", 0.5, 10.0, 3.0)
+        lock_view = st.checkbox("Lock Map Extent", value=True)
+    
+    search_btn = st.button("🛰️ SCAN ARCHIVE", type="primary", use_container_width=True)
 
-btn_search = st.sidebar.button("🔍 SEARCH ARCHIVE", type="primary", use_container_width=True)
+# --- MAIN LAYOUT ---
+l_col, m_col, r_col = st.columns([2, 6, 2])
 
-# --- CORE LOGIC ---
-if CLIENT_ID and CLIENT_SECRET:
-    config = SHConfig(sh_client_id=CLIENT_ID, sh_client_secret=CLIENT_SECRET)
-
-    if btn_search:
+# --- LOGIC & FETCHING ---
+if cid and sec:
+    config = SHConfig(sh_client_id=cid, sh_client_secret=sec)
+    
+    if search_btn:
         geolocator = Nominatim(user_agent=f"f_{st.session_state.app_uuid}")
         loc = geolocator.geocode(city, timeout=10)
         if loc: st.session_state.lat, st.session_state.lon = loc.latitude, loc.longitude
@@ -71,131 +89,104 @@ if CLIENT_ID and CLIENT_SECRET:
         off = (r_km / 111.32) / 2
         bbox = BBox(bbox=[st.session_state.lon-off, st.session_state.lat-off, 
                           st.session_state.lon+off, st.session_state.lat+off], crs=CRS.WGS84)
-        st.session_state.search_results = list(catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox, time=(str(search_win[0]), str(search_win[1]))))
-        st.session_state.image_cache = {} 
+        st.session_state.search_results = list(catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox, time=("2024-01-01", "2026-12-31")))
 
-    tab1, tab2, tab3 = st.tabs(["📊 Catalog & Dates", "🧪 Sync Color Lab", "🌊 Flood Analyst"])
-
-    # --- TAB 1: DATE SELECTION ---
-    with tab1:
+    # 1. LEFT COLUMN: Data List
+    with l_col:
+        st.markdown("### 📋 Image Catalog")
         if st.session_state.search_results:
-            st.markdown("### 📅 Archive Results")
             res = st.session_state.search_results
-            date_options = [f"{i}: {r['properties']['datetime'][:16]}" for i, r in enumerate(res)]
-            selected_picks = st.multiselect("Select dates to process:", date_options, default=date_options[:min(len(date_options), 2)])
+            date_opts = [f"{i}: {r['properties']['datetime'][:16]}" for i, r in enumerate(res)]
+            picks = st.multiselect("Active Layers:", date_opts, default=date_opts[:2])
             
-            if st.button("🚀 RENDER SELECTED DATES", use_container_width=True):
+            if st.button("⚡ PROCESS LAYERS", use_container_width=True):
                 off = (r_km / 111.32) / 2
                 bbox = BBox(bbox=[st.session_state.lon-off, st.session_state.lat-off, 
                                   st.session_state.lon+off, st.session_state.lat+off], crs=CRS.WGS84)
                 ev = "//VERSION=3\nfunction setup(){return{input:['VV'],output:{bands:1,sampleType:'FLOAT32'}};}function evaluatePixel(s){return[s.VV];}"
-                
-                with st.spinner("Downloading radar data..."):
-                    for p in selected_picks:
-                        idx = int(p.split(":")[0])
-                        dt = res[idx]['properties']['datetime']
-                        # FIXED: Explicitly named arguments for SDK compatibility
-                        input_data = SentinelHubRequest.input_data(
-                            data_collection=DataCollection.SENTINEL1_IW, 
-                            time_interval=(dt, dt)
-                        )
-                        req = SentinelHubRequest(
-                            evalscript=ev, 
-                            input_data=[input_data],
-                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], 
-                            bbox=bbox, 
-                            size=(600, 600), 
-                            config=config
-                        )
-                        st.session_state.image_cache[dt] = req.get_data()[0]
-
-            if st.session_state.image_cache:
-                keys = list(st.session_state.image_cache.keys())
-                g_cols = st.columns(2)
-                for i, k in enumerate(keys[:4]):
-                    with g_cols[i % 2]:
-                        st.markdown(f"**Acquisition:** {k[:16]}")
-                        create_geotiff_download(st.session_state.image_cache[k], f"SAR_{k[:10]}.tif", st.session_state.lat, st.session_state.lon, r_km, f"cat_dl_{i}")
-                        m_c = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
-                        off = (r_km / 111.32) / 2
-                        bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
-                        folium.raster_layers.ImageOverlay(get_img_url(np.clip(st.session_state.image_cache[k]*gain, 0, 1)), bnds).add_to(m_c)
-                        st_folium(m_c, height=300, key=f"cat_m_{i}", center=[st.session_state.lat, st.session_state.lon] if center_map else None)
+                for p in picks:
+                    idx = int(p.split(":")[0])
+                    dt = res[idx]['properties']['datetime']
+                    req = SentinelHubRequest(evalscript=ev, input_data=[SentinelHubRequest.input_data(DataCollection.SENTINEL1_IW, (dt, dt))],
+                                            responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox, size=(600, 600), config=config)
+                    st.session_state.image_cache[dt] = req.get_data()[0]
+            
+            for k in list(st.session_state.image_cache.keys()):
+                st.info(f"Loaded: {k[:16]}")
         else:
-            st.info("Please search a location in the sidebar to populate dates.")
+            st.caption("No data scanned yet.")
 
-    # --- TAB 2: COLOR LAB ---
-    with tab2:
-        if len(st.session_state.image_cache) >= 2:
-            keys = list(st.session_state.image_cache.keys())
-            c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
-            d1, d2 = c1.selectbox("Baseline (L)", keys, index=0), c2.selectbox("Analysis (R)", keys, index=1)
-            cmap_name = c3.selectbox("Colormap", ["GnBu", "YlGnBu", "Blues", "viridis", "magma", "bone"])
-            show_radar_lab = c4.checkbox("Show Radar", value=True)
+    # 2. CENTER COLUMN: The Map Workbench
+    with m_col:
+        tab_lab, tab_flood = st.tabs(["🧪 Sync Color Lab", "🌊 Flood Detection"])
+        
+        with tab_lab:
+            if len(st.session_state.image_cache) >= 2:
+                keys = list(st.session_state.image_cache.keys())
+                h1, h2, h3, h4 = st.columns([1,1,1,1])
+                d1 = h1.selectbox("L-Panel", keys, index=0)
+                d2 = h2.selectbox("R-Panel", keys, index=1)
+                cmap = h3.selectbox("Palette", ["GnBu", "PuBu", "magma", "bone"])
+                show_r = h4.checkbox("Overlay", value=True)
+                
+                # Floating Download Bar
+                dl1, dl2 = st.columns(2)
+                with dl1: create_geotiff_download(st.session_state.image_cache[d1], "L.tif", st.session_state.lat, st.session_state.lon, r_km, "dl_l")
+                with dl2: create_geotiff_download(st.session_state.image_cache[d2], "R.tif", st.session_state.lat, st.session_state.lon, r_km, "dl_r")
 
-            m_col_l, spacer, m_col_r, leg_col = st.columns([10, 1, 10, 1.5])
-            
-            def apply_c(data):
-                db = 10 * np.log10(np.squeeze(data) + 1e-10)
-                norm = np.clip((db - (-25)) / ((-5) - (-25)), 0, 1)
-                return get_img_url(plt.get_cmap(cmap_name)(norm))
+                m_l, space, m_r = st.columns([10, 1, 10])
+                off = (r_km / 111.32) / 2
+                bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
+                
+                def apply_c(data):
+                    db = 10 * np.log10(np.squeeze(data) + 1e-10)
+                    norm = np.clip((db - (-25)) / ((-5) - (-25)), 0, 1)
+                    return get_img_url(plt.get_cmap(cmap)(norm))
 
-            off = (r_km / 111.32) / 2
-            bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
+                with m_l:
+                    map1 = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
+                    if show_r: folium.raster_layers.ImageOverlay(apply_c(st.session_state.image_cache[d1]), bnds).add_to(map1)
+                    st_folium(map1, height=500, key="m1", center=[st.session_state.lat, st.session_state.lon] if lock_view else None)
+                
+                with m_r:
+                    map2 = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
+                    if show_r: folium.raster_layers.ImageOverlay(apply_c(st.session_state.image_cache[d2]), bnds).add_to(map2)
+                    st_folium(map2, height=500, key="m2", center=[st.session_state.lat, st.session_state.lon] if lock_view else None)
 
-            with m_col_l:
-                st.markdown(f"**L:** {d1[:16]}")
-                create_geotiff_download(st.session_state.image_cache[d1], "left.tif", st.session_state.lat, st.session_state.lon, r_km, "l_lab_d")
-                m1 = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=14)
-                if show_radar_lab: folium.raster_layers.ImageOverlay(apply_c(st.session_state.image_cache[d1]), bnds).add_to(m1)
-                st_folium(m1, height=500, key="lab_m1", center=[st.session_state.lat, st.session_state.lon] if center_map else None)
-
-            with m_col_r:
-                st.markdown(f"**R:** {d2[:16]}")
-                create_geotiff_download(st.session_state.image_cache[d2], "right.tif", st.session_state.lat, st.session_state.lon, r_km, "r_lab_d")
-                m2 = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=14)
-                if show_radar_lab: folium.raster_layers.ImageOverlay(apply_c(st.session_state.image_cache[d2]), bnds).add_to(m2)
-                st_folium(m2, height=500, key="lab_m2", center=[st.session_state.lat, st.session_state.lon] if center_map else None)
-
-            with leg_col:
-                fig_v, ax_v = plt.subplots(figsize=(0.5, 9))
-                norm = plt.Normalize(vmin=-25, vmax=-5)
-                plt.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap_name), cax=ax_v, orientation='vertical')
-                ax_v.set_ylabel('dB Strength', fontsize=9)
-                st.pyplot(fig_v)
-
-    # --- TAB 3: FLOOD ANALYST ---
-    with tab3:
-        if len(st.session_state.image_cache) >= 2:
-            keys = list(st.session_state.image_cache.keys())
-            cf1, cf2, cf3, cf4 = st.columns([2, 2, 1, 1])
-            b_dt, w_dt = cf1.selectbox("Dry Date", keys, index=0, key="fb"), cf2.selectbox("Wet Date", keys, index=1, key="fw")
-            f_col = cf3.color_picker("Flood Color", "#00FFFF")
-            show_flood = cf4.checkbox("Show Mask", value=True)
-
-            b_raw, w_raw = np.squeeze(st.session_state.image_cache[b_dt]), np.squeeze(st.session_state.image_cache[w_dt])
-            sens = st.slider("Flood Threshold (dB drop)", -15.0, -2.0, -6.0)
-            mask = ((10 * np.log10(w_raw + 1e-10) - 10 * np.log10(b_raw + 1e-10)) < sens).astype(np.uint8)
-            
-            px_m = (r_km * 2000) / 600
-            area_ha = (np.sum(mask) * (px_m**2)) / 10000
-            
-            d_act1, d_act2, d_met1, d_met2 = st.columns([1,1,2,2])
-            with d_act1: create_geotiff_download(mask, "flood_mask.tif", st.session_state.lat, st.session_state.lon, r_km, "f_t_btn")
-            with d_act2:
-                tf = from_bounds(st.session_state.lon-off, st.session_state.lat-off, st.session_state.lon+off, st.session_state.lat+off, mask.shape[1], mask.shape[0])
-                shps = list(features.shapes(mask.astype('int16'), mask=(mask > 0), transform=tf))
-                gj = {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": g} for g, v in shps]}
-                st.download_button("📐 JSON", json.dumps(gj), "flood.geojson", "application/json", use_container_width=True)
-            d_met1.metric("Area (Ha)", f"{area_ha:.2f}")
-            d_met2.metric("Area (km²)", f"{area_ha/100:.4f}")
-
-            mf = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=14)
-            if show_flood:
-                folium.raster_layers.ImageOverlay(get_img_url(np.clip(w_raw*gain, 0, 1)), bnds, opacity=0.4).add_to(mf)
+        with tab_flood:
+            if len(st.session_state.image_cache) >= 2:
+                keys = list(st.session_state.image_cache.keys())
+                f_b, f_w = st.columns(2)
+                d_dry = f_b.selectbox("Dry Reference", keys, index=0)
+                d_wet = f_w.selectbox("Crisis Date", keys, index=1)
+                
+                sens = st.slider("Sensitivity (dB Drop)", -15.0, -2.0, -6.0)
+                
+                b_raw, w_raw = np.squeeze(st.session_state.image_cache[d_dry]), np.squeeze(st.session_state.image_cache[d_wet])
+                mask = ((10 * np.log10(w_raw + 1e-10) - 10 * np.log10(b_raw + 1e-10)) < sens).astype(np.uint8)
+                
+                m_flood = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=14)
+                folium.raster_layers.ImageOverlay(get_img_url(np.clip(w_raw*gain, 0, 1)), bnds, opacity=0.5).add_to(m_flood)
+                
                 m_rgb = np.zeros((*mask.shape, 4))
-                h = f_col.lstrip('#'); rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
-                m_rgb[mask == 1] = [*rgb, 0.8]
-                folium.raster_layers.ImageOverlay(get_img_url(m_rgb), bnds).add_to(mf)
+                m_rgb[mask == 1] = [0, 1, 1, 0.8] # Cyan flood
+                folium.raster_layers.ImageOverlay(get_img_url(m_rgb), bnds).add_to(m_flood)
+                st_folium(m_flood, height=550, use_container_width=True, center=[st.session_state.lat, st.session_state.lon] if lock_view else None)
+
+    # 3. RIGHT COLUMN: Analytics & Legend
+    with r_col:
+        st.markdown("### 📊 Metrics")
+        if 'mask' in locals():
+            px_m = (r_km * 2000) / 600
+            ha = (np.sum(mask) * (px_m**2)) / 10000
+            st.metric("Flood Area", f"{ha:.1f} Ha")
+            st.metric("Flood Area", f"{ha/100:.3f} km²")
             
-            st_folium(mf, height=600, use_container_width=True, center=[st.session_state.lat, st.session_state.lon] if center_map else None)
+            create_geotiff_download(mask, "mask.tif", st.session_state.lat, st.session_state.lon, r_km, "main_dl")
+            
+            st.markdown("---")
+            st.caption("Backscatter Legend (dB)")
+            fig_l, ax_l = plt.subplots(figsize=(0.6, 6))
+            norm = plt.Normalize(vmin=-25, vmax=-5)
+            plt.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap if 'cmap' in locals() else 'GnBu'), cax=ax_l)
+            st.pyplot(fig_l)
