@@ -165,9 +165,7 @@ if CLIENT_ID and CLIENT_SECRET:
             c_lab1, c_lab2, c_lab3 = st.columns(3)
             lab_before = c_lab1.selectbox("Baseline", d_list, index=0)
             lab_after = c_lab2.selectbox("Crisis", d_list, index=1)
-            cmap_choice = c_lab3.selectbox("CMap", ['Accent','Accent_r','Blues','Blues_r','BrBG','BrBG_r','BuGn','BuGn_r','BuPu','BuPu_r','CMRmap','CMRmap_r','Dark2','Dark2_r','GnBu','GnBu_r','Grays','Grays_r',
-                                                    'Greens','Greens_r','Greys','Greys_r','OrRd','OrRd_r','Oranges','Oranges_r','PRGn','PRGn_r','Paired','Paired_r','Pastel1','Pastel1_r','Pastel2','Pastel2_r',
-                                                    'PiYG','PiYG_r','PuBu','PuBu_r','PuBuGn','PuBuGn_r','PuOr','PuOr_r','PuRd','PuRd_r','Purples','Purples_r','RdBu','RdBu_r','RdGy','RdGy_r','RdPu','RdPu_r','RdYlBu'])
+            cmap_choice = c_lab3.selectbox("CMap", ['Accent','Accent_r','Blues'])
             db_min, db_max = st.slider("Range (dB)", -35, 5, (-25, -5))
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 3))
             d_left = 10 * np.log10(st.session_state.image_cache_s1[lab_before][:,:,0] + 1e-10)
