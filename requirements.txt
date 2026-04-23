@@ -6,11 +6,9 @@ geopy
 streamlit-folium
 folium
 rasterio
-tifffile
+fiona
 pandas
 Pillow
-osmnx
 shapely
 pyproj
 geopandas
-shapely
