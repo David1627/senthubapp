@@ -6,6 +6,7 @@ from sentinelhub import (SHConfig, SentinelHubRequest, DataCollection, MimeType,
 from geopy.geocoders import Nominatim
 import datetime
 import folium
+from folium.plugins import DualMap
 from streamlit_folium import st_folium
 import base64
 import json
@@ -16,10 +17,9 @@ import rasterio
 from rasterio import features
 from rasterio.transform import from_bounds
 from rasterio.io import MemoryFile
-import matplotlib.pyplot as plt
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="S1 Fast Explorer", page_icon="📡")
+st.set_page_config(layout="wide", page_title="S1 Dual-View Explorer", page_icon="🌓")
 
 # --- INITIALIZE SESSION STATE ---
 if 'search_results' not in st.session_state: st.session_state.search_results = None
@@ -44,16 +44,16 @@ def create_geotiff_download(data, filename, lat, lon, r_km, key):
         return st.download_button("💾 TIFF", mem.read(), filename, "image/tiff", key=key)
 
 # --- SIDEBAR ---
-st.sidebar.title("🌊 S1 Fast Explorer")
+st.sidebar.title("🌊 S1 Dual-Explorer")
 CLIENT_ID = st.sidebar.text_input("Client ID", type="password")
 CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password")
 
-with st.sidebar.expander("📍 Parameters", expanded=True):
+with st.sidebar.expander("📍 Search Parameters", expanded=True):
     city = st.sidebar.text_input("Location", "Torroella de Montgrí, Spain")
     r_km = st.sidebar.slider("Radius (km)", 1, 30, 8)
-    win = st.sidebar.date_input("Window", [datetime.date.today() - datetime.timedelta(days=30), datetime.date.today()])
+    win = st.sidebar.date_input("Window", [datetime.date.today() - datetime.timedelta(days=45), datetime.date.today()])
 
-gain = st.sidebar.slider("Visual Gain", 0.5, 8.0, 3.0)
+gain = st.sidebar.slider("Radar Brightness", 0.5, 10.0, 3.0)
 btn_search = st.sidebar.button("🔍 FETCH DATA", type="primary", use_container_width=True)
 
 if CLIENT_ID and CLIENT_SECRET:
@@ -71,93 +71,90 @@ if CLIENT_ID and CLIENT_SECRET:
                               st.session_state.lon+off, st.session_state.lat+off], crs=CRS.WGS84)
             st.session_state.search_results = list(catalog.search(DataCollection.SENTINEL1_IW, bbox=bbox, time=(str(win[0]), str(win[1]))))
 
-    t1, t2, t3 = st.tabs(["Dashboard", "Compare Lab", "Flood Analysis"])
+    tab1, tab2, tab3 = st.tabs(["📑 Catalog", "🌓 Dual-Sync Compare", "🚨 Flood Extraction"])
 
-    with t1:
+    with tab1:
         if st.session_state.search_results:
             res = st.session_state.search_results
             opts = [f"{i}: {r['properties']['datetime'][:16]}" for i, r in enumerate(res)]
-            picks = st.multiselect("Select dates:", opts, default=opts[:2])
+            picks = st.multiselect("Select images to process:", opts, default=opts[:min(len(opts), 2)])
             
-            if st.button("RENDER IMAGES", use_container_width=True):
+            if st.button("RENDER DATA", use_container_width=True):
                 off = (r_km / 111.32) / 2
                 bbox = BBox(bbox=[st.session_state.lon-off, st.session_state.lat-off, 
                                   st.session_state.lon+off, st.session_state.lat+off], crs=CRS.WGS84)
                 ev = "//VERSION=3\nfunction setup(){return{input:['VV'],output:{bands:1,sampleType:'FLOAT32'}};}function evaluatePixel(s){return[s.VV];}"
                 for p in picks:
                     dt = res[int(p.split(":")[0])]['properties']['datetime']
-                    # FIXED THE TYPEERROR HERE:
-                    req = SentinelHubRequest(
-                        evalscript=ev, 
-                        input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(dt, dt))],
-                        responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], 
-                        bbox=bbox, size=(500, 500), config=config
-                    )
-                    st.session_state.image_cache[dt] = req.get_data()[0]
+                    with st.spinner(f"Fetching {dt[:10]}..."):
+                        req = SentinelHubRequest(evalscript=ev, input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL1_IW, time_interval=(dt, dt))],
+                                                responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)], bbox=bbox, size=(600, 600), config=config)
+                        st.session_state.image_cache[dt] = req.get_data()[0]
 
             for dt, data in st.session_state.image_cache.items():
                 c_i, c_d = st.columns([5, 1])
-                c_i.image(np.clip(data*gain, 0, 1), caption=dt[:10], use_container_width=True)
-                with c_d: create_geotiff_download(data, f"{dt[:10]}.tif", st.session_state.lat, st.session_state.lon, r_km, f"d_{dt}")
+                c_i.image(np.clip(data*gain, 0, 1), caption=dt[:16], use_container_width=True)
+                with c_d: create_geotiff_download(data, f"S1_{dt[:10]}.tif", st.session_state.lat, st.session_state.lon, r_km, f"dl_{dt}")
 
-    with t2:
+    with tab2:
         if len(st.session_state.image_cache) >= 2:
             keys = list(st.session_state.image_cache.keys())
-            c_sel1, c_sel2, c_sel3 = st.columns(3)
-            d1 = c_sel1.selectbox("Dry Date", keys, index=0)
-            d2 = c_sel2.selectbox("Wet Date", keys, index=1)
-            cmap = c_sel3.selectbox("Colormap", ["Greys_r", "viridis", "magma", "bone"])
+            c1, c2 = st.columns(2)
+            d1 = c1.selectbox("Left Map (Baseline)", keys, index=0)
+            d2 = c2.selectbox("Right Map (Crisis)", keys, index=1)
             
-            col1, col2 = st.columns(2)
+            # Interactive Dual-Sync Map
+            m = DualMap(location=[st.session_state.lat, st.session_state.lon], zoom_start=14, layout='vertical')
             
-            # Efficient color mapping using matplotlib cm without creating heavy figures
-            def apply_cmap(data, name):
-                db = 10 * np.log10(data + 1e-10)
-                norm = (db - (-25)) / ((-5) - (-25)) # Normalize dB to 0-1
-                return plt.get_cmap(name)(np.clip(norm, 0, 1))
+            off = (r_km / 111.32) / 2
+            bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
+            
+            # Left Layer
+            img_left = get_img_url(np.clip(st.session_state.image_cache[d1]*gain, 0, 1))
+            folium.raster_layers.ImageOverlay(img_left, bnds).add_to(m.m1)
+            
+            # Right Layer
+            img_right = get_img_url(np.clip(st.session_state.image_cache[d2]*gain, 0, 1))
+            folium.raster_layers.ImageOverlay(img_right, bnds).add_to(m.m2)
+            
+            st_folium(m, height=600, width=None, use_container_width=True)
+        else: st.info("Process at least 2 images in Catalog first.")
 
-            col1.image(apply_cmap(st.session_state.image_cache[d1], cmap), caption="Dry (dB Normalized)", use_container_width=True)
-            col2.image(apply_cmap(st.session_state.image_cache[d2], cmap), caption="Wet (dB Normalized)", use_container_width=True)
-            
-            st.divider()
-            c_dl1, c_dl2 = st.columns(2)
-            with c_dl1: create_geotiff_download(st.session_state.image_cache[d1], "dry.tif", st.session_state.lat, st.session_state.lon, r_km, "dl_l1")
-            with c_dl2: create_geotiff_download(st.session_state.image_cache[d2], "wet.tif", st.session_state.lat, st.session_state.lon, r_km, "dl_l2")
-
-    with t3:
+    with tab3:
         if len(st.session_state.image_cache) >= 2:
             keys = list(st.session_state.image_cache.keys())
-            c_f1, c_f2, c_f3 = st.columns(3)
-            b_dt = c_f1.selectbox("Dry", keys, index=0, key="fb")
-            w_dt = c_f2.selectbox("Wet", keys, index=1, key="fw")
-            f_col = c_f3.color_picker("Flood Color", "#00D1FF")
+            cf1, cf2, cf3 = st.columns(3)
+            b_dt = cf1.selectbox("Dry Baseline", keys, index=0, key="f_b")
+            w_dt = cf2.selectbox("Wet Analysis", keys, index=1, key="f_w")
+            f_col = cf3.color_picker("Flood Highlight Color", "#00F6FF")
             
-            thresh = st.slider("Sensitivity (dB Threshold)", -12.0, -2.0, -6.0)
+            sens = st.slider("Flood Sensitivity (dB Threshold)", -12.0, -2.0, -6.0)
             
             b_val = st.session_state.image_cache[b_dt]
             w_val = st.session_state.image_cache[w_dt]
             diff = 10 * np.log10(w_val + 1e-10) - 10 * np.log10(b_val + 1e-10)
-            mask = (diff < thresh).astype(np.uint8)
+            mask = (diff < sens).astype(np.uint8)
             
-            m = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=14)
+            mf = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=14)
             off = (r_km / 111.32) / 2
             bnds = [[st.session_state.lat-off, st.session_state.lon-off], [st.session_state.lat+off, st.session_state.lon+off]]
             
-            folium.raster_layers.ImageOverlay(get_img_url(np.clip(w_val*gain, 0, 1)), bnds, opacity=0.4).add_to(m)
+            # Background
+            folium.raster_layers.ImageOverlay(get_img_url(np.clip(w_val*gain, 0, 1)), bnds, opacity=0.4).add_to(mf)
             
+            # Flood Layer
             h = f_col.lstrip('#'); rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
             m_rgb = np.zeros((*mask.shape[:2], 4))
             m_rgb[mask[:,0] == 1] = [*rgb, 0.8]
-            folium.raster_layers.ImageOverlay(get_img_url(m_rgb), bnds).add_to(m)
+            folium.raster_layers.ImageOverlay(get_img_url(m_rgb), bnds).add_to(mf)
             
-            st_folium(m, height=450, width=None)
+            st_folium(mf, height=500, width=None, use_container_width=True)
             
-            st.write("### 📥 Download Results")
-            cd1, cd2 = st.columns(2)
-            with cd1: create_geotiff_download(mask, "flood.tif", st.session_state.lat, st.session_state.lon, r_km, "fdl1")
-            with cd2:
-                # Optimized GeoJSON logic
+            st.write("### 📥 Export flood layer")
+            c_d1, c_d2 = st.columns(2)
+            with c_d1: create_geotiff_download(mask, "flood.tif", st.session_state.lat, st.session_state.lon, r_km, "f1")
+            with c_d2:
                 tf = from_bounds(st.session_state.lon-off, st.session_state.lat-off, st.session_state.lon+off, st.session_state.lat+off, mask.shape[1], mask.shape[0])
                 shps = features.shapes(mask.astype('int16'), mask=(mask > 0), transform=tf)
                 gj = {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": g} for g, v in shps]}
-                st.download_button("📐 GeoJSON", json.dumps(gj), "flood.geojson", "application/json", key="fdl2")
+                st.download_button("📐 Export GeoJSON", json.dumps(gj), "flood.geojson", "application/json")
