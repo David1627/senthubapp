@@ -99,7 +99,7 @@ if CLIENT_ID and CLIENT_SECRET:
         target_lat, target_lon = None, None
         if search_mode == "Search City" and city_query:
             try:
-                geolocator = Nominatim(user_agent=f"flood_explorer_{st.session_state.app_uuid_s1}")
+                geolocator = Nominatim(user_agent=f"flood_explorer_{st.session_state.app_uuid_s1}_new")
                 location = geolocator.geocode(city_query, timeout=10)
                 if location: target_lat, target_lon = location.latitude, location.longitude
                 else: st.error("City not found.")
